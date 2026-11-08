@@ -183,3 +183,8 @@ h2{font-size:clamp(20px,4.5vw,26px);line-height:1.45;margin:8px 0 14px;text-alig
   .fire-opts .opt{font-size:15px;padding:10px}
   .fire-opts .opt.img-opt img{max-height:80px}
 }
+
+.ver-chip{
+  display:inline-block;margin:2px 0 8px;padding:4px 10px;border-radius:999px;
+  background:#263238;color:#90caf9;font-size:12px;font-weight:800;letter-spacing:.02em;
+}

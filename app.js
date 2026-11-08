@@ -4,8 +4,9 @@ const $ = id => document.getElementById(id);
 let all = [], qs = [], i = 0, sc = 0, mode = 0, takeN = 16, done = false, st = {};
 let playKind = "quiz"; // "quiz" | "fire"
 let fireLevel = 5;
-const FIRE_MAX = 5;
+const FIRE_MAX = 5; // = zone count
 const FIRE_QUESTIONS = 20;
+let fireBusy = false;
 
 const LESSON = {
   1: "善用金錢",
@@ -73,33 +74,42 @@ async function startFire() {
   takeN = FIRE_QUESTIONS;
   qs = mapPool(all.slice(), FIRE_QUESTIONS);
   i = 0; sc = 0; st = {}; done = false;
+  fireBusy = false;
   fireLevel = FIRE_MAX;
   show("fire");
   $("corridor").classList.remove("flare", "won");
   const banner = $("fireWonBanner");
   if (banner) banner.classList.add("hide");
-  updateFireMeter();
+  $("fireOpts").classList.remove("dim");
   try {
     Fire3D.init($("fire3d"));
     Fire3D.resetWin();
-    Fire3D.setFireLevel(fireLevel);
   } catch (e) {
     console.error("Fire3D init failed", e);
   }
+  syncFireMeter();
   if (window.AudioCtl) await AudioCtl.onQuizStart();
   renderFire();
 }
 
-function updateFireMeter() {
+function syncFireMeter() {
+  try { fireLevel = Fire3D.getRemaining(); } catch (_) {}
   const m = $("fireMeter");
   m.innerHTML = "";
   for (let n = 0; n < FIRE_MAX; n++) {
     const s = document.createElement("span");
+    // show remaining fires from the left
     s.className = "fl" + (n < fireLevel ? " on" : "");
     s.textContent = "🔥";
     m.appendChild(s);
   }
-  try { Fire3D.setFireLevel(fireLevel); } catch (_) {}
+}
+
+function setBubblesVisible(v) {
+  const box = $("fireOpts");
+  if (!box) return;
+  box.classList.toggle("dim", !v);
+  box.style.pointerEvents = v ? "" : "none";
 }
 
 function render() {
@@ -138,6 +148,7 @@ function render() {
 function renderFire() {
   const q = qs[i];
   done = false;
+  fireBusy = false;
   $("fireProg").textContent = `${i + 1}/${qs.length}`;
   $("fireScore").textContent = String(sc);
   $("fireSrc").textContent = `📖 ${q.source || ""}`;
@@ -145,6 +156,7 @@ function renderFire() {
   $("fireFb").classList.add("hide");
   $("fireNext").classList.add("hide");
   $("corridor").classList.remove("flare");
+  setBubblesVisible(true);
   const box = $("fireOpts");
   box.innerHTML = "";
   const isImg = q.optionType === "image";
@@ -167,6 +179,7 @@ function renderFire() {
     b.onclick = () => pickFire(k);
     box.appendChild(b);
   });
+  syncFireMeter();
 }
 
 function pick(k) {
@@ -192,9 +205,10 @@ function pick(k) {
   $("fill").style.width = ((i + 1) / qs.length) * 100 + "%";
 }
 
-function pickFire(k) {
-  if (done) return;
+async function pickFire(k) {
+  if (done || fireBusy) return;
   done = true;
+  fireBusy = true;
   const q = qs[i];
   const ok = k === q.ans;
   const bs = $("fireOpts").children;
@@ -203,44 +217,69 @@ function pickFire(k) {
   if (!ok) bs[k].classList.add("bad");
   const s = st[q.lesson] || (st[q.lesson] = [0, 0]);
   s[1]++;
+
+  const ansText = q.o[q.ans].alt || q.o[q.ans].t;
+
   if (ok) {
     sc++;
     s[0]++;
-    fireLevel = Math.max(0, fireLevel - 1);
-    try { Fire3D.spray(); } catch (_) {}
+    $("fireScore").textContent = String(sc);
+    setBubblesVisible(false);
     if (window.AudioCtl) {
       AudioCtl.playSplash();
-      setTimeout(() => AudioCtl.playCheer(), 180);
+      setTimeout(() => AudioCtl.playCheer(), 200);
     }
-  } else {
-    fireLevel = Math.min(FIRE_MAX, fireLevel + 1);
-    $("corridor").classList.add("flare");
-    try { Fire3D.flare(); } catch (_) {}
-    if (window.AudioCtl) AudioCtl.playFireFlare();
-    setTimeout(() => $("corridor").classList.remove("flare"), 400);
-  }
-  updateFireMeter();
-  $("fireScore").textContent = String(sc);
-  const ansText = q.o[q.ans].alt || q.o[q.ans].t;
-  $("fireFb").innerHTML =
-    (ok
-      ? `✅ 答對了！射水救火！火勢 ${fireLevel}/${FIRE_MAX}`
-      : `❌ 答錯了！${fireLevel >= FIRE_MAX ? "火勢仍然猛烈！" : "火勢更大！"}正確：${ansText}`) +
-    "<br>💡 " + q.explanation +
-    `<span class="book">📚 翻書：${q.source || "（見課本／作業）"}</span>`;
-  $("fireFb").classList.remove("hide");
+    $("fireFb").innerHTML =
+      `✅ 答對了！射水救火中…` +
+      "<br>💡 " + q.explanation +
+      `<span class="book">📚 翻書：${q.source || "（見課本／作業）"}</span>`;
+    $("fireFb").classList.remove("hide");
 
-  if (fireLevel === 0) {
-    $("corridor").classList.add("won");
-    try { Fire3D.win(); } catch (_) {}
-    const banner = $("fireWonBanner");
-    if (banner) banner.classList.remove("hide");
-    $("fireNext").textContent = "看結果 🏆";
+    let outcome = { remaining: fireLevel - 1, walked: false, won: false };
+    try {
+      outcome = await Fire3D.playCorrect();
+    } catch (e) {
+      console.error(e);
+    }
+    fireLevel = outcome.remaining;
+    syncFireMeter();
+
+    if (outcome.won) {
+      $("corridor").classList.add("won");
+      try { Fire3D.win(); } catch (_) {}
+      const banner = $("fireWonBanner");
+      if (banner) banner.classList.remove("hide");
+      $("fireFb").innerHTML =
+        `✅ 太棒了！五區大火全部救熄！` +
+        "<br>💡 " + q.explanation +
+        `<span class="book">📚 翻書：${q.source || "（見課本／作業）"}</span>`;
+      $("fireNext").textContent = "看結果 🏆";
+      $("fireNext").classList.remove("hide");
+      fireBusy = false;
+      return;
+    }
+
+    $("fireFb").innerHTML =
+      `✅ 答對了！已熄滅這一區的火${outcome.walked ? "，前進到下一火區！" : "！"}火勢 ${fireLevel}/${FIRE_MAX}` +
+      "<br>💡 " + q.explanation +
+      `<span class="book">📚 翻書：${q.source || "（見課本／作業）"}</span>`;
+    $("fireNext").textContent = i + 1 < qs.length ? "下一題 ➜" : "看結果 🏆";
     $("fireNext").classList.remove("hide");
-    return;
+    fireBusy = false;
+  } else {
+    $("corridor").classList.add("flare");
+    try { Fire3D.playWrong(); } catch (_) {}
+    if (window.AudioCtl) AudioCtl.playFireFlare();
+    setTimeout(() => $("corridor").classList.remove("flare"), 450);
+    $("fireFb").innerHTML =
+      `❌ 答錯了！火勢更猛！正確：${ansText}` +
+      "<br>💡 " + q.explanation +
+      `<span class="book">📚 翻書：${q.source || "（見課本／作業）"}</span>`;
+    $("fireFb").classList.remove("hide");
+    $("fireNext").textContent = i + 1 < qs.length ? "下一題 ➜" : "看結果 🏆";
+    $("fireNext").classList.remove("hide");
+    fireBusy = false;
   }
-  $("fireNext").textContent = i + 1 < qs.length ? "下一題 ➜" : "看結果 🏆";
-  $("fireNext").classList.remove("hide");
 }
 
 function next() {
@@ -251,7 +290,7 @@ function next() {
 }
 
 function nextFire() {
-  if (!done) return;
+  if (!done || fireBusy) return;
   if (fireLevel === 0) {
     result();
     return;
@@ -271,8 +310,8 @@ function result() {
     const n = win ? 3 : cleared >= 3 ? 2 : cleared >= 1 ? 1 : 0;
     $("stars").textContent = "★".repeat(n) + "☆".repeat(3 - n);
     $("final").textContent = win
-      ? `太棒了！答對 ${sc} 題，成功把 ${FIRE_MAX} 格火全部救熄！`
-      : `答對 ${sc} / ${qs.length} 題，救熄了 ${cleared}/${FIRE_MAX} 格火。再試一次把火救清！`;
+      ? `太棒了！答對 ${sc} 題，成功把 ${FIRE_MAX} 個火區全部救熄！`
+      : `答對 ${sc} / ${qs.length} 題，救熄了 ${cleared}/${FIRE_MAX} 個火區。再試一次把火救清！`;
   } else {
     $("resultTitle").textContent = "挑戰完成！";
     const r = sc / qs.length;
@@ -306,12 +345,19 @@ document.addEventListener("keydown", e => {
     if (e.key >= "1" && e.key <= "4" && qs[i] && +e.key <= qs[i].o.length) pick(+e.key - 1);
     else if (e.key === "Enter" || e.key === " ") next();
   } else if (!$("fire").classList.contains("hide")) {
+    if (fireBusy) return;
     if (e.key >= "1" && e.key <= "4" && qs[i] && +e.key <= qs[i].o.length) pickFire(+e.key - 1);
     else if (e.key === "Enter" || e.key === " ") nextFire();
   }
 });
 
-window.__p2quiz = { getQs: () => qs, getFire: () => fireLevel, pickFire, startFire };
+window.__p2quiz = {
+  getQs: () => qs,
+  getFire: () => fireLevel,
+  getZone: () => { try { return Fire3D.getZoneIndex(); } catch (_) { return 0; } },
+  pickFire,
+  startFire
+};
 
 (function initAudio() {
   if (!window.AudioCtl) return;

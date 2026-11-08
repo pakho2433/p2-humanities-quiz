@@ -198,3 +198,6 @@ h2{font-size:clamp(20px,4.5vw,26px);line-height:1.45;margin:8px 0 14px;text-alig
   .bubble{min-width:46%;font-size:14px;padding:10px 12px}
   .bubble.img-b img{max-height:56px}
 }
+
+.bubbles.dim{opacity:0;transform:scale(.92);transition:opacity .25s,transform .25s;pointer-events:none!important}
+.bubbles{transition:opacity .25s,transform .25s}

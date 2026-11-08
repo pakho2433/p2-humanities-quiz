@@ -1,4 +1,4 @@
-import Fire3D from './js/fire3d.js?v=20261108v6';
+import Fire3D from './js/fire3d.js?v=20261108v7';
 
 const $ = id => document.getElementById(id);
 let all = [], qs = [], i = 0, sc = 0, mode = 0, takeN = 16, done = false, st = {};
@@ -36,7 +36,7 @@ function mapPool(pool, n) {
   });
 }
 
-fetch("questions.json?v=20261108v6")
+fetch("questions.json?v=20261108v7")
   .then(r => r.json())
   .then(d => { all = d; })
   .catch(e => { console.error(e); alert("題目載入失敗"); });

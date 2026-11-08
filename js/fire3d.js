@@ -1,6 +1,6 @@
 /**
  * 救火挑戰 · Three.js FPS corridor
- * Shader noise flames + particles + steam; correct → spray → extinguish → walk.
+ * Organic flame sheets + smoke/embers/steam; correct → spray → extinguish → walk.
  */
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
@@ -20,7 +20,7 @@ let zoneIndex = 0;
 let sprayPts, sprayData, waterTex, smokeTex, steamTex, emberTex;
 let hoseKick = 0;
 let sprayT = 0, flareT = 0;
-let walking = false, walkFrom = 0, walkTo = 0, walkT = 0, walkDur = 1.45;
+let walking = false, walkFrom = 0, walkTo = 0, walkT = 0, walkDur = 1.15;
 let busy = false;
 let animating = false;
 let hostEl = null;
@@ -48,6 +48,60 @@ function softDot(stops) {
     g.fillStyle = grd;
     g.fillRect(0, 0, w, h);
   }, false);
+}
+
+/** Organic flame sprite sheet (4 frames) — irregular edges, not a triangle */
+let _flameSheet = null;
+function flameSheetTex() {
+  if (_flameSheet) return _flameSheet;
+  const FW = 128, FH = 192, frames = 4;
+  const c = document.createElement('canvas');
+  c.width = FW * frames; c.height = FH;
+  const g = c.getContext('2d');
+  g.clearRect(0, 0, c.width, c.height);
+  for (let f = 0; f < frames; f++) {
+    const ox = f * FW;
+    // layered soft blobs rising into tongues
+    for (let layer = 0; layer < 18; layer++) {
+      const t = layer / 17;
+      const cy = FH - 18 - t * (FH - 40) + Math.sin(f * 1.7 + layer) * 6;
+      const cx = FW * 0.5 + Math.sin(f * 2.1 + layer * 0.9) * (8 + t * 18);
+      const rx = (22 - t * 16) * (0.7 + 0.5 * Math.abs(Math.sin(f + layer * 0.6)));
+      const ry = (28 - t * 10) * (0.8 + 0.4 * Math.abs(Math.cos(f * 0.8 + layer)));
+      const grd = g.createRadialGradient(ox + cx, cy, 0, ox + cx, cy, Math.max(rx, ry));
+      if (t < 0.25) {
+        grd.addColorStop(0, 'rgba(255,250,220,0.95)');
+        grd.addColorStop(0.45, 'rgba(255,200,60,0.7)');
+        grd.addColorStop(1, 'rgba(255,120,0,0)');
+      } else if (t < 0.55) {
+        grd.addColorStop(0, 'rgba(255,180,40,0.85)');
+        grd.addColorStop(0.5, 'rgba(255,90,10,0.55)');
+        grd.addColorStop(1, 'rgba(180,20,0,0)');
+      } else {
+        grd.addColorStop(0, 'rgba(255,90,20,0.7)');
+        grd.addColorStop(0.45, 'rgba(200,30,0,0.4)');
+        grd.addColorStop(1, 'rgba(40,0,0,0)');
+      }
+      g.fillStyle = grd;
+      g.beginPath();
+      g.ellipse(ox + cx, cy, rx, ry, Math.sin(f + layer) * 0.4, 0, Math.PI * 2);
+      g.fill();
+    }
+    // base ember pool
+    const base = g.createRadialGradient(ox + FW / 2, FH - 10, 2, ox + FW / 2, FH - 10, 40);
+    base.addColorStop(0, 'rgba(255,220,120,0.9)');
+    base.addColorStop(0.4, 'rgba(255,100,20,0.5)');
+    base.addColorStop(1, 'rgba(80,0,0,0)');
+    g.fillStyle = base;
+    g.beginPath();
+    g.ellipse(ox + FW / 2, FH - 8, 38, 16, 0, 0, Math.PI * 2);
+    g.fill();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.needsUpdate = true;
+  _flameSheet = t;
+  return t;
 }
 
 function woodMaps() {
@@ -249,8 +303,9 @@ function std(color, rough = 0.6, metal = 0, extra = {}) {
 function zoneZ(i) { return FIRST_FIRE_Z - i * ZONE_SPACING; }
 function camZForZone(i) { return zoneZ(i) + VIEW_DIST; }
 
-/** Animated FBM noise flame shader (billboard plane) */
-function createFlameMaterial(seed = 0) {
+/** Animated organic flame (sprite-sheet + noise dissolve) */
+function createFlameMaterial(seed = 0, mode = 'volume') {
+  const sheet = flameSheetTex();
   const mat = new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
@@ -260,7 +315,9 @@ function createFlameMaterial(seed = 0) {
       uTime: { value: 0 },
       uSeed: { value: seed },
       uIntensity: { value: 1 },
-      uFlicker: { value: 1 }
+      uFlicker: { value: 1 },
+      uMap: { value: sheet },
+      uMode: { value: mode === 'core' ? 1.0 : (mode === 'tongue' ? 2.0 : 0.0) }
     },
     vertexShader: /* glsl */`
       varying vec2 vUv;
@@ -276,71 +333,61 @@ function createFlameMaterial(seed = 0) {
       uniform float uSeed;
       uniform float uIntensity;
       uniform float uFlicker;
+      uniform sampler2D uMap;
+      uniform float uMode;
 
-      float hash(vec2 p) {
-        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+      float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
+      float noise(vec2 p){
+        vec2 i=floor(p); vec2 f=fract(p);
+        float a=hash(i), b=hash(i+vec2(1.,0.)), c=hash(i+vec2(0.,1.)), d=hash(i+vec2(1.,1.));
+        vec2 u=f*f*(3.-2.*f);
+        return mix(a,b,u.x)+(c-a)*u.y*(1.-u.x)+(d-b)*u.x*u.y;
       }
-      float noise(vec2 p) {
-        vec2 i = floor(p);
-        vec2 f = fract(p);
-        float a = hash(i);
-        float b = hash(i + vec2(1.0, 0.0));
-        float c = hash(i + vec2(0.0, 1.0));
-        float d = hash(i + vec2(1.0, 1.0));
-        vec2 u = f * f * (3.0 - 2.0 * f);
-        return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
-      }
-      float fbm(vec2 p) {
-        float v = 0.0;
-        float a = 0.5;
-        for (int i = 0; i < 5; i++) {
-          v += a * noise(p);
-          p *= 2.05;
-          a *= 0.5;
-        }
+      float fbm(vec2 p){
+        float v=0.; float a=.5;
+        for(int i=0;i<4;i++){ v+=a*noise(p); p*=2.05; a*=.5; }
         return v;
       }
 
       void main() {
-        vec2 uv = vUv;
-        // taper flame silhouette
-        float width = 0.55 * (1.0 - uv.y * 0.85);
-        float edge = abs(uv.x - 0.5);
-        float shape = 1.0 - smoothstep(width * 0.55, width, edge);
-        shape *= smoothstep(0.0, 0.08, uv.y) * (1.0 - smoothstep(0.88, 1.0, uv.y));
+        // 4-frame sheet along X
+        float frame = floor(mod(uTime * 10.0 + uSeed * 3.0, 4.0));
+        vec2 uv = vec2((vUv.x + frame) * 0.25, vUv.y);
 
+        // organic warp so edges shimmer
         float t = uTime * 1.8 + uSeed;
-        vec2 nUV = vec2(uv.x * 3.2 + uSeed, uv.y * 2.4 - t);
-        float n = fbm(nUV);
-        float n2 = fbm(nUV * 1.7 + 3.1);
-        float flame = shape * (0.55 + 0.55 * n) * (0.7 + 0.4 * n2);
-        flame *= uIntensity * uFlicker;
-        flame = clamp(flame, 0.0, 1.5);
+        float n = fbm(vec2(vUv.x * 3.5 + uSeed, vUv.y * 2.8 - t));
+        float n2 = fbm(vec2(vUv.x * 6.0, vUv.y * 4.0 - t * 1.3) + 2.0);
+        uv.x += (n - 0.5) * 0.04;
+        uv.y += (n2 - 0.5) * 0.03;
 
-        // color: white core → yellow → orange → deep red
-        vec3 cCore = vec3(1.0, 0.98, 0.85);
-        vec3 cYellow = vec3(1.0, 0.78, 0.18);
-        vec3 cOrange = vec3(1.0, 0.35, 0.05);
-        vec3 cRed = vec3(0.55, 0.05, 0.0);
-        float h = uv.y + n * 0.15;
-        vec3 col = mix(cCore, cYellow, smoothstep(0.0, 0.28, h));
-        col = mix(col, cOrange, smoothstep(0.25, 0.55, h));
-        col = mix(col, cRed, smoothstep(0.5, 0.9, h));
-        // hot side flickers
-        col += vec3(0.15, 0.05, 0.0) * n2 * (1.0 - h);
+        vec4 tex = texture2D(uMap, uv);
+        float a = tex.a * tex.a; // tighten
+        // noise dissolve for lively tongues
+        a *= smoothstep(0.15, 0.65, n * 0.65 + n2 * 0.5 + (1.0 - vUv.y) * 0.25);
+        a *= uIntensity * uFlicker;
+        if (uMode > 0.5 && uMode < 1.5) a *= 1.25;
+        if (uMode > 1.5) a *= 0.85;
 
-        float alpha = clamp(flame * 1.35, 0.0, 1.0);
-        alpha *= shape;
-        // keep a denser core so flame reads as volume, not flat glow
-        alpha = max(alpha, shape * 0.35 * uIntensity);
-        if (alpha < 0.015) discard;
-        gl_FragColor = vec4(col * (1.0 + 0.55 * flame), alpha);
+        vec3 col = tex.rgb;
+        // push mid tones toward hotter orange
+        col = mix(col, vec3(1.0, 0.45, 0.05), 0.25 * (1.0 - vUv.y));
+        col *= 1.0 + 0.45 * uFlicker;
+
+        if (a < 0.02) discard;
+        gl_FragColor = vec4(col, clamp(a, 0.0, 1.0));
       }
     `
   });
   flameMats.push(mat);
   return mat;
 }
+
+function attachInvModel(mesh) {
+  // kept for API compatibility; sheet flames don't need inv model
+  mesh.onBeforeRender = function () {};
+}
+
 
 function buildCorridor() {
   root = new THREE.Group();
@@ -476,53 +523,49 @@ function buildZone(i) {
   root.add(group);
 
   const flames = [];
-  const count = LOW ? 5 : 7;
-  for (let n = 0; n < count; n++) {
-    const mat = createFlameMaterial(i * 17.3 + n * 4.1);
-    const plane = new THREE.Mesh(new THREE.PlaneGeometry(1.15, 1.9), mat);
-    const x = (n / (count - 1) - 0.5) * 3.1;
-    const s = 0.95 + Math.random() * 0.55;
-    plane.scale.set(s, s * (1.05 + Math.random() * 0.25), 1);
-    plane.position.set(x, 0.95 * s, (Math.random() - 0.5) * 0.55);
-    plane.rotation.y = (Math.random() - 0.5) * 0.35;
-    plane.renderOrder = 4;
-    plane.userData = { baseY: plane.position.y, baseS: s, phase: Math.random() * 6.28, speed: 2.8 + Math.random() * 2.5, mat };
+  const sheetCount = LOW ? 7 : 11;
+  for (let n = 0; n < sheetCount; n++) {
+    const mode = n < 3 ? 'core' : (n % 4 === 0 ? 'tongue' : 'volume');
+    const mat = createFlameMaterial(i * 19.7 + n * 5.3 + Math.random(), mode);
+    const h = 1.35 + Math.random() * 1.1;
+    const w = 0.75 + Math.random() * 0.95;
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+    // clustered pile, not evenly spaced grid
+    const ang = Math.random() * Math.PI * 2;
+    const rad = Math.random() * 1.15;
+    plane.position.set(Math.cos(ang) * rad, h * 0.42 + Math.random() * 0.15, Math.sin(ang) * rad * 0.55);
+    plane.rotation.y = Math.random() * Math.PI; // random facing for volume
+    if (Math.random() > 0.5) plane.scale.x *= -1; // mirror variety
+    plane.renderOrder = 4 + (mode === 'core' ? 1 : 0);
+    plane.userData = {
+      baseY: plane.position.y, baseS: 1, phase: Math.random() * 6.28,
+      speed: 2.2 + Math.random() * 3.0, mat, vol: false, billboard: false
+    };
     group.add(plane);
     flames.push(plane);
   }
-  // cross-angle secondary cards for volume
-  for (let n = 0; n < (LOW ? 3 : 4); n++) {
-    const mat = createFlameMaterial(i * 9 + n * 11 + 50);
-    const plane = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 1.7), mat);
-    const s = 0.7 + Math.random() * 0.35;
-    plane.scale.set(s, s * 1.1, 1);
-    plane.position.set((n / 3 - 0.5) * 2.4, 0.75 * s, -0.35 - Math.random() * 0.4);
-    plane.rotation.y = Math.PI / 2.4 + (Math.random() - 0.5) * 0.2;
-    plane.renderOrder = 4;
-    plane.userData = { baseY: plane.position.y, baseS: s, phase: Math.random() * 6, speed: 3.2 + Math.random() * 2, mat };
-    group.add(plane);
-    flames.push(plane);
-  }
-  // opaque-ish orange core billboards (NormalBlending) so fire has body
+  // soft ground bloom discs
   for (let n = 0; n < (LOW ? 2 : 3); n++) {
-    const mat = createFlameMaterial(i * 5 + n * 13 + 90);
-    mat.blending = THREE.NormalBlending;
-    mat.depthWrite = false;
-    const plane = new THREE.Mesh(new THREE.PlaneGeometry(0.85, 1.45), mat);
-    const s = 0.85 + Math.random() * 0.25;
-    plane.scale.set(s, s, 1);
-    plane.position.set((n / 2 - 0.5) * 1.6, 0.7 * s, 0.05);
-    plane.renderOrder = 3;
-    plane.userData = { baseY: plane.position.y, baseS: s, phase: Math.random() * 6, speed: 2.5 + Math.random() * 2, mat };
-    group.add(plane);
-    flames.push(plane);
+    const glowSpr = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.6, 1.6),
+      new THREE.MeshBasicMaterial({
+        map: emberTex, color: 0xff6d00,
+        transparent: true, opacity: 0.4, depthWrite: false,
+        blending: THREE.AdditiveBlending, side: THREE.DoubleSide
+      })
+    );
+    glowSpr.rotation.x = -Math.PI / 2;
+    glowSpr.position.set((n - 1) * 0.7, 0.04, (Math.random() - 0.5) * 0.3);
+    glowSpr.renderOrder = 2;
+    glowSpr.userData = { baseY: 0.04, baseS: 1, phase: Math.random() * 6, speed: 2, mat: glowSpr.material, vol: false };
+    group.add(glowSpr);
+    flames.push(glowSpr);
   }
-
   // floor heat glow
   const glow = new THREE.Mesh(
     new THREE.PlaneGeometry(3.8, 2.0),
     new THREE.MeshBasicMaterial({
-      color: 0xff6a00, transparent: true, opacity: 0.5,
+      color: 0xff7a18, transparent: true, opacity: 0.62,
       blending: THREE.AdditiveBlending, depthWrite: false
     })
   );
@@ -562,7 +605,7 @@ function buildZone(i) {
     group.add(bit);
   }
 
-  const light = new THREE.PointLight(0xff5500, 18, 11, 1.15);
+  const light = new THREE.PointLight(0xff6a1a, 26, 12, 1.05);
   light.position.set(0, 1.35, 0);
   if (!LOW && i === 0) {
     light.castShadow = true;
@@ -576,48 +619,48 @@ function buildZone(i) {
   group.add(flare);
 
   // smoke
-  const sn = LOW ? 36 : 60;
+  const sn = LOW ? 28 : 70;
   const spos = new Float32Array(sn * 3);
   const svel = [];
   for (let k = 0; k < sn; k++) {
     spos[k * 3] = (Math.random() - 0.5) * 2.9;
-    spos[k * 3 + 1] = Math.random() * 2.0;
-    spos[k * 3 + 2] = (Math.random() - 0.5) * 1.1;
+    spos[k * 3 + 1] = Math.random() * 2.4;
+    spos[k * 3 + 2] = (Math.random() - 0.5) * 1.2;
     svel.push({
-      vx: (Math.random() - 0.5) * 0.15,
-      vy: 0.45 + Math.random() * 0.55,
-      vz: (Math.random() - 0.5) * 0.1,
+      vx: (Math.random() - 0.5) * 0.18,
+      vy: 0.55 + Math.random() * 0.7,
+      vz: (Math.random() - 0.5) * 0.12,
       life: Math.random()
     });
   }
   const sgeo = new THREE.BufferGeometry();
   sgeo.setAttribute('position', new THREE.BufferAttribute(spos, 3));
   const smoke = new THREE.Points(sgeo, new THREE.PointsMaterial({
-    map: smokeTex, size: LOW ? 0.55 : 0.72, transparent: true, depthWrite: false,
-    opacity: 0.55, sizeAttenuation: true
+    map: smokeTex, size: LOW ? 1.1 : 1.45, transparent: true, depthWrite: false,
+    opacity: 0.78, sizeAttenuation: true
   }));
-  smoke.position.y = 0.2;
+  smoke.position.y = 0.35;
   group.add(smoke);
 
   // embers
-  const en = LOW ? 18 : 32;
+  const en = LOW ? 20 : 48;
   const epos = new Float32Array(en * 3);
   const evel = [];
   for (let k = 0; k < en; k++) {
     epos[k * 3] = (Math.random() - 0.5) * 2.4;
-    epos[k * 3 + 1] = 0.3 + Math.random() * 1.5;
+    epos[k * 3 + 1] = 0.3 + Math.random() * 1.8;
     epos[k * 3 + 2] = (Math.random() - 0.5) * 0.9;
     evel.push({
-      vx: (Math.random() - 0.5) * 0.25,
-      vy: 0.6 + Math.random() * 1.1,
-      vz: (Math.random() - 0.5) * 0.2
+      vx: (Math.random() - 0.5) * 0.35,
+      vy: 0.85 + Math.random() * 1.4,
+      vz: (Math.random() - 0.5) * 0.28
     });
   }
   const egeo = new THREE.BufferGeometry();
   egeo.setAttribute('position', new THREE.BufferAttribute(epos, 3));
   const embers = new THREE.Points(egeo, new THREE.PointsMaterial({
-    map: emberTex, size: 0.12, transparent: true, depthWrite: false,
-    blending: THREE.AdditiveBlending, opacity: 0.95, sizeAttenuation: true
+    map: emberTex, size: 0.16, transparent: true, depthWrite: false,
+    blending: THREE.AdditiveBlending, opacity: 1.0, sizeAttenuation: true
   }));
   group.add(embers);
 
@@ -632,101 +675,138 @@ function buildZone(i) {
 function buildHose() {
   hoseGroup = new THREE.Group();
   camera.add(hoseGroup);
-  // FPS viewmodel lower-rightish, nozzle aiming into corridor
-  hoseGroup.position.set(0.18, -0.48, -0.62);
-  hoseGroup.rotation.set(-0.22, -0.18, 0.12);
-  hoseGroup.scale.setScalar(1.05);
+  hoseGroup.position.set(0.28, -0.42, -0.52);
+  hoseGroup.rotation.set(-0.32, -0.22, 0.08);
+  hoseGroup.scale.setScalar(1.35);
 
   const hoseMap = rubberHoseTex();
   const hoseMat = new THREE.MeshStandardMaterial({
-    map: hoseMap, roughness: 0.42, metalness: 0.08, color: 0xffffff
+    map: hoseMap, roughness: 0.38, metalness: 0.1, color: 0xffffff
   });
 
-  // long red hose body pointing forward (-Z)
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.085, 0.85, 24), hoseMat);
-  body.rotation.x = Math.PI / 2;
-  body.position.set(0, 0.02, 0.28);
-  body.castShadow = true;
-  hoseGroup.add(body);
-
-  for (let i = 0; i < 9; i++) {
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.088, 0.012, 8, 20), std(0x7f0000, 0.4, 0.2));
+  // curved-looking hose body (segmented taper)
+  for (let s = 0; s < 5; s++) {
+    const r0 = 0.078 - s * 0.004;
+    const r1 = 0.074 - s * 0.004;
+    const seg = new THREE.Mesh(new THREE.CylinderGeometry(r1, r0, 0.16, 20), hoseMat);
+    seg.rotation.x = Math.PI / 2;
+    seg.position.set(0, 0.02 + s * 0.004, 0.55 - s * 0.15);
+    seg.castShadow = true;
+    hoseGroup.add(seg);
+  }
+  for (let i = 0; i < 11; i++) {
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.082 - i * 0.0015, 0.011, 8, 22), std(0x8b0000, 0.38, 0.22));
     ring.rotation.x = Math.PI / 2;
-    ring.position.set(0, 0.02, -0.05 + i * 0.08);
+    ring.position.set(0, 0.025, 0.52 - i * 0.065);
     hoseGroup.add(ring);
   }
 
   const metalMap = metalTex();
-  const nozzleMat = new THREE.MeshStandardMaterial({
-    map: metalMap, roughness: 0.16, metalness: 0.96, envMapIntensity: 1.4
+  const chrome = new THREE.MeshStandardMaterial({
+    map: metalMap, roughness: 0.18, metalness: 0.92, envMapIntensity: 2.2, color: 0xf2f6fa
   });
-  // silver nozzle taper
-  const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.078, 0.28, 22), nozzleMat);
+  const brass = new THREE.MeshStandardMaterial({
+    color: 0xffc107, roughness: 0.28, metalness: 0.88, envMapIntensity: 1.8, emissive: 0x3a2800, emissiveIntensity: 0.25
+  });
+
+  // coupling collar
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.095, 0.08, 24), chrome);
+  collar.rotation.x = Math.PI / 2;
+  collar.position.set(0, 0.03, -0.08);
+  hoseGroup.add(collar);
+  const collarRing = new THREE.Mesh(new THREE.TorusGeometry(0.096, 0.01, 8, 24), brass);
+  collarRing.rotation.x = Math.PI / 2;
+  collarRing.position.set(0, 0.03, -0.05);
+  hoseGroup.add(collarRing);
+
+  // main nozzle body (tapered)
+  const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.082, 0.32, 28), chrome);
   nozzle.rotation.x = Math.PI / 2;
-  nozzle.position.set(0, 0.02, -0.28);
+  nozzle.position.set(0, 0.03, -0.28);
+  nozzle.castShadow = true;
   hoseGroup.add(nozzle);
 
-  const band = new THREE.Mesh(new THREE.TorusGeometry(0.08, 0.014, 8, 20), std(0xffc107, 0.22, 0.92));
-  band.rotation.x = Math.PI / 2;
-  band.position.set(0, 0.02, -0.16);
-  hoseGroup.add(band);
+  // grip knurl rings
+  for (let i = 0; i < 4; i++) {
+    const knurl = new THREE.Mesh(new THREE.TorusGeometry(0.07 - i * 0.004, 0.008, 6, 20), std(0xb0bec5, 0.28, 0.9));
+    knurl.rotation.x = Math.PI / 2;
+    knurl.position.set(0, 0.03, -0.18 - i * 0.04);
+    hoseGroup.add(knurl);
+  }
 
-  const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.04, 0.12, 18), std(0xffd54f, 0.2, 0.94));
+  // shutoff lever
+  const leverPivot = new THREE.Group();
+  leverPivot.position.set(0.07, 0.08, -0.22);
+  const lever = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.015, 0.14), brass);
+  lever.position.set(0, 0, -0.04);
+  leverPivot.add(lever);
+  const leverKnob = new THREE.Mesh(new THREE.SphereGeometry(0.018, 12, 10), brass);
+  leverKnob.position.set(0, 0, -0.12);
+  leverPivot.add(leverKnob);
+  hoseGroup.add(leverPivot);
+
+  // tip / orifice
+  const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.036, 0.1, 22), brass);
   tip.rotation.x = Math.PI / 2;
-  tip.position.set(0, 0.02, -0.46);
+  tip.position.set(0, 0.03, -0.48);
   hoseGroup.add(tip);
+  const tipLip = new THREE.Mesh(new THREE.TorusGeometry(0.028, 0.006, 8, 20), chrome);
+  tipLip.rotation.x = Math.PI / 2;
+  tipLip.position.set(0, 0.03, -0.53);
+  hoseGroup.add(tipLip);
 
   const hole = new THREE.Mesh(
-    new THREE.CircleGeometry(0.016, 16),
-    new THREE.MeshBasicMaterial({ color: 0x030303 })
+    new THREE.CircleGeometry(0.012, 18),
+    new THREE.MeshBasicMaterial({ color: 0x010101 })
   );
-  hole.position.set(0, 0.02, -0.52);
+  hole.position.set(0, 0.03, -0.535);
   hoseGroup.add(hole);
 
+  // water jet stream
   jetMesh = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.014, 0.05, 1.5, 12, 1, true),
+    new THREE.CylinderGeometry(0.01, 0.055, 1.7, 14, 1, true),
     new THREE.MeshBasicMaterial({
       color: 0xb3e5fc, transparent: true, opacity: 0,
       blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide
     })
   );
   jetMesh.rotation.x = Math.PI / 2;
-  jetMesh.position.set(0, 0.05, -1.25);
+  jetMesh.position.set(0, 0.06, -1.35);
   jetMesh.visible = false;
   hoseGroup.add(jetMesh);
 
   const leather = leatherTex();
   function glove(side) {
     const g = new THREE.Group();
-    const palmMat = new THREE.MeshStandardMaterial({ map: leather, color: 0xffb300, roughness: 0.55, metalness: 0.03 });
-    const fingerMat = new THREE.MeshStandardMaterial({ map: leather, color: 0xffc107, roughness: 0.52, metalness: 0.03 });
-    // flat palm box
-    const palm = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.07, 0.24), palmMat);
+    const palmMat = new THREE.MeshStandardMaterial({ map: leather, color: 0xffb300, roughness: 0.5, metalness: 0.04 });
+    const fingerMat = new THREE.MeshStandardMaterial({ map: leather, color: 0xffc107, roughness: 0.48, metalness: 0.04 });
+    const palm = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.075, 0.26), palmMat);
     palm.castShadow = true;
     g.add(palm);
-    // fingers as short cylinders (clearer than capsules in swiftshader)
     for (let i = 0; i < 4; i++) {
-      const f = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.02, 0.14, 10), fingerMat);
-      f.rotation.x = Math.PI / 2.4;
-      f.position.set(-0.07 + i * 0.045, 0.02, -0.17);
+      const f = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.02, 0.15, 12), fingerMat);
+      f.rotation.x = Math.PI / 2.35;
+      f.position.set(-0.075 + i * 0.048, 0.025, -0.18);
       g.add(f);
+      const tipF = new THREE.Mesh(new THREE.SphereGeometry(0.022, 10, 8), fingerMat);
+      tipF.position.set(-0.075 + i * 0.048, 0.04, -0.26);
+      g.add(tipF);
     }
-    const thumb = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.02, 0.11, 10), fingerMat);
-    thumb.rotation.z = side * Math.PI / 2.2;
-    thumb.rotation.x = 0.4;
-    thumb.position.set(side * 0.12, 0.015, -0.02);
+    const thumb = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.022, 0.12, 12), fingerMat);
+    thumb.rotation.z = side * Math.PI / 2.1;
+    thumb.rotation.x = 0.45;
+    thumb.position.set(side * 0.13, 0.02, -0.02);
     g.add(thumb);
-    // blue cuff
-    const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.09, 0.1, 14), std(0x1565c0, 0.4, 0.12));
+    const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.095, 0.12, 16), std(0x1565c0, 0.38, 0.12));
     cuff.rotation.x = Math.PI / 2;
-    cuff.position.set(0, 0, 0.17);
+    cuff.position.set(0, 0, 0.19);
     g.add(cuff);
-    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.09, 0.012, 8, 16), std(0x0d47a1, 0.35, 0.2));
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.095, 0.014, 8, 18), std(0x0d47a1, 0.32, 0.2));
     rim.rotation.x = Math.PI / 2;
-    rim.position.set(0, 0, 0.12);
+    rim.position.set(0, 0, 0.13);
     g.add(rim);
-    g.position.set(side * 0.2, -0.02, 0.42);
-    g.rotation.set(0.35, side * 0.25, side * 0.15);
+    g.position.set(side * 0.22, -0.015, 0.4);
+    g.rotation.set(0.38, side * 0.22, side * 0.12);
     return g;
   }
   hoseGroup.add(glove(-1));
@@ -831,7 +911,7 @@ function beginWalk(toIndex) {
   walkFrom = camera.position.z;
   walkTo = camZForZone(toIndex);
   walkT = 0;
-  walkDur = 1.45;
+  walkDur = 1.15;
 }
 
 function easeInOut(t) {
@@ -894,14 +974,17 @@ function tick(dt) {
   const t = clock.elapsedTime;
 
   flameMats.forEach((m) => {
-    m.uniforms.uTime.value = t;
-    m.uniforms.uFlicker.value = 0.88 + Math.sin(t * 11.0 + m.uniforms.uSeed.value) * 0.12;
+    if (!m.uniforms) return;
+    if (m.uniforms.uTime) m.uniforms.uTime.value = t;
+    if (m.uniforms.uFlicker && m.uniforms.uSeed) {
+      m.uniforms.uFlicker.value = 0.88 + Math.sin(t * 11.0 + m.uniforms.uSeed.value) * 0.12;
+    }
   });
 
   if (hoseGroup) {
-    hoseGroup.rotation.x = -0.22 + Math.sin(t * 1.7) * 0.018 + hoseKick;
-    hoseGroup.rotation.z = 0.12 + Math.sin(t * 1.2) * 0.01;
-    hoseGroup.position.y = -0.48 + Math.sin(t * 2.3) * 0.008;
+    hoseGroup.rotation.x = -0.32 + Math.sin(t * 1.7) * 0.018 + hoseKick;
+    hoseGroup.rotation.z = 0.08 + Math.sin(t * 1.2) * 0.01;
+    hoseGroup.position.y = -0.42 + Math.sin(t * 2.3) * 0.008;
     if (walking) {
       hoseGroup.rotation.x += Math.sin(t * 14) * 0.016;
       hoseGroup.position.y += Math.abs(Math.sin(walkT / walkDur * Math.PI)) * 0.025;
@@ -920,15 +1003,20 @@ function tick(dt) {
     zone.flames.forEach((ch) => {
       const u = ch.userData;
       const wob = Math.sin(t * u.speed + u.phase);
-      ch.position.y = u.baseY + wob * 0.08;
-      const sc = u.baseS * (1 + wob * 0.08);
-      ch.scale.set(sc, sc * 1.15, 1);
+      ch.position.y = u.baseY + wob * 0.06;
+      const sc = u.baseS * (1 + wob * 0.06);
+      if (u.vol) ch.scale.set(sc * (1 + wob * 0.04), sc * (1 + wob * 0.1), sc * (1 - wob * 0.03));
+      else ch.scale.set(sc * (1 + wob * 0.05), sc * (1.05 + wob * 0.08), 1);
+      if (u.billboard && camera) ch.quaternion.copy(camera.quaternion);
       if (u.mat && u.mat.uniforms) {
-        u.mat.uniforms.uIntensity.value = 0.9 + wob * 0.15;
+        if (u.mat.uniforms.uIntensity) u.mat.uniforms.uIntensity.value = 0.9 + wob * 0.15;
+        if (u.mat.uniforms.uTime) u.mat.uniforms.uTime.value = t;
+      } else if (u.mat && u.mat.opacity != null) {
+        u.mat.opacity = 0.35 + wob * 0.12;
       }
     });
     const pulse = 0.82 + Math.sin(t * 10 + zone.i) * 0.18;
-    zone.light.intensity = 16 * pulse;
+    zone.light.intensity = 22 * pulse;
     zone.light.position.x = Math.sin(t * 3.2 + zone.i) * 0.25;
     zone.glow.material.opacity = 0.38 + pulse * 0.18;
     if (zone.bloom) zone.bloom.material.opacity = 0.12 + pulse * 0.1;
@@ -1060,7 +1148,7 @@ export function init(host) {
   renderer.setSize(hostEl.clientWidth || 640, hostEl.clientHeight || 360, false);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 0.95;
+  renderer.toneMappingExposure = 0.85;
   renderer.shadowMap.enabled = !LOW;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.domElement.style.width = '100%';
@@ -1091,9 +1179,9 @@ export function init(host) {
   scene.add(keyLight);
 
   smokeTex = softDot([
-    [0, 'rgba(65,65,65,0.6)'],
-    [0.4, 'rgba(45,45,45,0.28)'],
-    [1, 'rgba(25,25,25,0)']
+    [0, 'rgba(40,40,40,0.85)'],
+    [0.35, 'rgba(30,30,30,0.45)'],
+    [1, 'rgba(15,15,15,0)']
   ]);
   emberTex = softDot([
     [0, 'rgba(255,220,120,1)'],

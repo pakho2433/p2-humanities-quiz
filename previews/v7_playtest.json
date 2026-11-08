@@ -1,0 +1,81 @@
+{
+  "ok": true,
+  "checks": [
+    {
+      "name": "options in fire-panel",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "options NOT mid-screen overlay",
+      "pass": true,
+      "detail": "optsTop=544.796875 corrBottom=436"
+    },
+    {
+      "name": "no bubble class",
+      "pass": true,
+      "detail": "bubbles=0"
+    },
+    {
+      "name": "has opt buttons",
+      "pass": true,
+      "detail": "opts=4"
+    },
+    {
+      "name": "3d canvas present",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "fire decreased after correct",
+      "pass": true,
+      "detail": "rem=4"
+    },
+    {
+      "name": "walked to zone 1",
+      "pass": true,
+      "detail": "zone=1"
+    },
+    {
+      "name": "feedback mentions extinguish/advance",
+      "pass": true,
+      "detail": "✅ 答對了！已熄滅這一區的火，前進到下一火區！火勢 4/5\n💡 課本例子：陪做功課、教踏單車等。\n📚 翻書：課本 p.24"
+    },
+    {
+      "name": "wrong keeps fire level",
+      "pass": true,
+      "detail": "rem=4"
+    },
+    {
+      "name": "wrong stays on same zone",
+      "pass": true,
+      "detail": "zone=1"
+    },
+    {
+      "name": "wrong feedback",
+      "pass": true,
+      "detail": "❌ 答錯了！火勢更猛！正確：早上 5:00–7:00\n💡 卯時＝早上 5:00–7:00。\n📚 翻書：課本 p.9"
+    },
+    {
+      "name": "second correct extinguishes",
+      "pass": true,
+      "detail": "rem=3"
+    },
+    {
+      "name": "walked to zone 2",
+      "pass": true,
+      "detail": "zone=2"
+    },
+    {
+      "name": "layout still bottom after play",
+      "pass": true,
+      "detail": "{\"inPanel\":true,\"below\":true}"
+    },
+    {
+      "name": "no critical page errors",
+      "pass": true,
+      "detail": ""
+    }
+  ],
+  "errors": []
+}

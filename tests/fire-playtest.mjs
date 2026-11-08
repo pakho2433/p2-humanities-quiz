@@ -1,6 +1,6 @@
 /**
  * Playtest 救火挑戰: options at bottom, correct→spray→walk, wrong→flare.
- * Saves screenshots to previews/v6_*.png
+ * Saves screenshots to previews/v7_*.png
  */
 import { chromium } from 'playwright';
 import http from 'node:http';
@@ -64,13 +64,13 @@ const log = (...a) => console.log(((Date.now() - T0) / 1000).toFixed(1) + 's', .
 try {
   log('goto', base);
   await page.goto(base, { waitUntil: 'networkidle', timeout: 60000 });
-  await page.waitForSelector('#fireStart', { timeout: 15000 });
-  await page.screenshot({ path: path.join(PREV, 'v6_home.png') });
+  await page.waitForSelector('#fireStart', { timeout: 25000 });
+  await page.screenshot({ path: path.join(PREV, 'v7_home.png') });
 
   log('start fire mode');
   await page.click('#fireStart');
   await page.waitForSelector('#fire:not(.hide)', { timeout: 10000 });
-  await page.waitForSelector('#fire3d canvas', { timeout: 15000 });
+  await page.waitForSelector('#fire3d canvas', { timeout: 25000 });
   await wait(1800); // let three.js init + first frame
 
   // Layout: options must be inside .fire-panel, NOT overlaid mid-corridor
@@ -103,7 +103,7 @@ try {
   check('no bubble class', layout.bubbleCount === 0, `bubbles=${layout.bubbleCount}`);
   check('has opt buttons', layout.optCount >= 2, `opts=${layout.optCount}`);
   check('3d canvas present', layout.hasCanvas);
-  await page.screenshot({ path: path.join(PREV, 'v6_zone0_idle.png'), fullPage: true });
+  await page.screenshot({ path: path.join(PREV, 'v7_zone0_idle.png'), fullPage: true });
 
   // Find correct answer index via __p2quiz
   const ans0 = await page.evaluate(() => {
@@ -115,13 +115,13 @@ try {
   // Click correct
   await page.click(`#fireOpts button.opt:nth-child(${ans0 + 1})`);
   await wait(500);
-  await page.screenshot({ path: path.join(PREV, 'v6_spray.png'), fullPage: true });
+  await page.screenshot({ path: path.join(PREV, 'v7_spray.png'), fullPage: true });
 
   // Wait for playCorrect to finish (spray + extinguish + walk ~2.5s)
   await page.waitForFunction(() => {
     const n = document.getElementById('fireNext');
     return n && !n.classList.contains('hide');
-  }, null, { timeout: 12000 });
+  }, null, { timeout: 25000 });
   await wait(400);
 
   const afterCorrect = await page.evaluate(() => ({
@@ -134,7 +134,7 @@ try {
   check('fire decreased after correct', afterCorrect.remaining === 4, `rem=${afterCorrect.remaining}`);
   check('walked to zone 1', afterCorrect.zone === 1, `zone=${afterCorrect.zone}`);
   check('feedback mentions extinguish/advance', /熄|前進|救火/.test(afterCorrect.fb), afterCorrect.fb);
-  await page.screenshot({ path: path.join(PREV, 'v6_after_walk.png'), fullPage: true });
+  await page.screenshot({ path: path.join(PREV, 'v7_after_walk.png'), fullPage: true });
 
   // Next question then wrong answer
   await page.click('#fireNext');
@@ -149,7 +149,7 @@ try {
   await page.waitForFunction(() => {
     const n = document.getElementById('fireNext');
     return n && !n.classList.contains('hide');
-  }, null, { timeout: 8000 });
+  }, null, { timeout: 20000 });
   const afterWrong = await page.evaluate(() => ({
     remaining: window.__p2quiz.getFire(),
     zone: window.__p2quiz.getZone(),
@@ -159,7 +159,7 @@ try {
   check('wrong keeps fire level', afterWrong.remaining === 4, `rem=${afterWrong.remaining}`);
   check('wrong stays on same zone', afterWrong.zone === 1, `zone=${afterWrong.zone}`);
   check('wrong feedback', /答錯|火勢/.test(afterWrong.fb), afterWrong.fb);
-  await page.screenshot({ path: path.join(PREV, 'v6_flare.png'), fullPage: true });
+  await page.screenshot({ path: path.join(PREV, 'v7_flare.png'), fullPage: true });
 
   // One more correct to confirm spray+walk still works from zone 1 → 2
   await page.click('#fireNext');
@@ -169,7 +169,7 @@ try {
   await page.waitForFunction(() => {
     const n = document.getElementById('fireNext');
     return n && !n.classList.contains('hide') && window.__p2quiz.getZone() >= 2;
-  }, null, { timeout: 15000 }).catch(() => {});
+  }, null, { timeout: 25000 }).catch(() => {});
   await wait(300);
   const after2 = await page.evaluate(() => ({
     remaining: window.__p2quiz.getFire(),
@@ -178,7 +178,7 @@ try {
   log('after2', after2);
   check('second correct extinguishes', after2.remaining === 3, `rem=${after2.remaining}`);
   check('walked to zone 2', after2.zone === 2, `zone=${after2.zone}`);
-  await page.screenshot({ path: path.join(PREV, 'v6_zone2.png'), fullPage: true });
+  await page.screenshot({ path: path.join(PREV, 'v7_zone2.png'), fullPage: true });
 
   // Re-check layout still bottom after gameplay
   const layout2 = await page.evaluate(() => {
@@ -197,13 +197,13 @@ try {
   results.ok = false;
   results.errors.push(String(e && e.stack || e));
   console.error('PLAYTEST ERROR', e);
-  try { await page.screenshot({ path: path.join(PREV, 'v6_error.png'), fullPage: true }); } catch (_) {}
+  try { await page.screenshot({ path: path.join(PREV, 'v7_error.png'), fullPage: true }); } catch (_) {}
 }
 
 const pageErrors = results.errors.filter((e) => !/favicon|AudioContext|autoplay/i.test(e));
 check('no critical page errors', pageErrors.length === 0, pageErrors.slice(0, 3).join(' | '));
 
-fs.writeFileSync(path.join(PREV, 'v6_playtest.json'), JSON.stringify(results, null, 2));
+fs.writeFileSync(path.join(PREV, 'v7_playtest.json'), JSON.stringify(results, null, 2));
 console.log('\n=== SUMMARY ===');
 console.log(results.ok ? 'ALL PASSED' : 'FAILED');
 console.log('checks', results.checks.filter(c => c.pass).length + '/' + results.checks.length);

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>二上人文問答溫習 · 快樂的生活</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="app">
+  <section id="home" class="card">
+    <div class="logo">🌈</div>
+    <h1>二上人文問答溫習</h1>
+    <p class="sub">今日人文 · 《快樂的生活》第1–4課</p>
+    <p class="hint">每題有頁數，答完可即時翻書核對</p>
+    <button class="big mode" data-l="0" data-n="28">🌟 全冊混合（約40分鐘・28題）</button>
+    <div class="grid">
+      <button class="big mode" data-l="1" data-n="16">💰 第1課<br><small>善用金錢</small></button>
+      <button class="big mode" data-l="2" data-n="16">⏰ 第2課<br><small>善用閒暇</small></button>
+      <button class="big mode" data-l="3" data-n="16">💻 第3課<br><small>善用資訊科技</small></button>
+      <button class="big mode" data-l="4" data-n="16">🤝 第4課<br><small>交朋結友</small></button>
+    </div>
+  </section>
+
+  <section id="quiz" class="card hide">
+    <div class="top">
+      <span id="prog"></span>
+      <span id="score"></span>
+    </div>
+    <div class="bar"><div id="fill"></div></div>
+    <p id="tag" class="tag"></p>
+    <p id="src" class="src"></p>
+    <h2 id="q"></h2>
+    <div id="opts"></div>
+    <div id="fb" class="hide"></div>
+    <button id="next" class="big next hide">下一題 ➜</button>
+  </section>
+
+  <section id="result" class="card hide">
+    <h1>挑戰完成！</h1>
+    <div id="stars"></div>
+    <p id="final"></p>
+    <div id="per"></div>
+    <button id="again" class="big">🔁 再玩一次</button>
+    <button id="home2" class="big alt">🏠 返回首頁</button>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

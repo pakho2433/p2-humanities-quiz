@@ -14,6 +14,7 @@
     <h1>二上人文問答溫習</h1>
     <p class="sub">今日人文 · 《快樂的生活》第1–4課</p>
     <p class="hint">每題有頁數，答完可即時翻書核對</p>
+    <button class="big fire-mode" id="fireStart" type="button">🚒 救火挑戰<br><small>答啱就射水救火！</small></button>
     <button class="big mode" data-l="0" data-n="28">🌟 全冊混合（約40分鐘・28題）</button>
     <div class="grid">
       <button class="big mode" data-l="1" data-n="16">💰 第1課<br><small>善用金錢</small></button>
@@ -37,8 +38,40 @@
     <button id="next" class="big next hide">下一題 ➜</button>
   </section>
 
+  <!-- 救火模式：第一人稱走廊 -->
+  <section id="fire" class="fire-wrap hide" aria-label="救火挑戰">
+    <div class="fire-hud">
+      <button type="button" id="fireHome" class="fire-hud-btn" title="返回">🏠</button>
+      <div class="fire-meter" id="fireMeter" aria-label="火勢"></div>
+      <div class="fire-score"><span id="fireProg">1/20</span> · ⭐ <span id="fireScore">0</span></div>
+    </div>
+    <div class="corridor" id="corridor">
+      <div class="ceil"></div>
+      <div class="wall wall-l"></div>
+      <div class="wall wall-r"></div>
+      <div class="floor"></div>
+      <div class="exit-sign">出口 →</div>
+      <div class="picture"></div>
+      <div class="flames" id="flames"></div>
+      <div class="spray" id="spray" aria-hidden="true"></div>
+      <div class="bubbles" id="fireOpts"></div>
+      <div class="hose">
+        <div class="glove g-l"></div>
+        <div class="glove g-r"></div>
+        <div class="hose-body"></div>
+        <div class="nozzle"></div>
+      </div>
+    </div>
+    <div class="fire-panel">
+      <p id="fireSrc" class="src"></p>
+      <h2 id="fireQ"></h2>
+      <div id="fireFb" class="hide"></div>
+      <button id="fireNext" class="big next hide">下一題 ➜</button>
+    </div>
+  </section>
+
   <section id="result" class="card hide">
-    <h1>挑戰完成！</h1>
+    <h1 id="resultTitle">挑戰完成！</h1>
     <div id="stars"></div>
     <p id="final"></p>
     <div id="per"></div>

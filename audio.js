@@ -258,6 +258,37 @@
       if (!this.muted) this.playWelcome();
     },
 
+
+    /** Water spray / splash for fire mode */
+    playSplash() {
+      if (!this.ctx || this.muted) return;
+      const t = this.ctx.currentTime;
+      this.noiseHit(t, 0.18, 0.35, 900);
+      this.noiseHit(t + 0.05, 0.22, 0.22, 1600);
+      this.tone(420, t, 0.12, "sine", this.sfxGain, 0.12);
+      this.tone(680, t + 0.06, 0.15, "triangle", this.sfxGain, 0.1);
+      this.tone(880, t + 0.12, 0.2, "sine", this.sfxGain, 0.08);
+    },
+
+    /** Fire flare whoosh on wrong answer */
+    playFireFlare() {
+      if (!this.ctx || this.muted) return;
+      const t = this.ctx.currentTime;
+      this.tone(90, t, 0.35, "sawtooth", this.sfxGain, 0.18, 1);
+      this.tone(140, t + 0.05, 0.3, "square", this.sfxGain, 0.1, 1);
+      this.noiseHit(t, 0.25, 0.2, 400);
+    },
+
+    /** Short cheer when fire extinguished a notch / win */
+    playCheer() {
+      if (!this.ctx || this.muted) return;
+      const t = this.ctx.currentTime + 0.02;
+      [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => {
+        this.tone(f, t + i * 0.07, 0.28, "triangle", this.sfxGain, 0.22);
+      });
+      this.tone(1318.5, t + 0.32, 0.35, "sine", this.sfxGain, 0.12);
+    },
+
     async onQuizStart() {
       await this.ensure();
       if (!this.welcomePlayed && !this.muted) this.playWelcome();

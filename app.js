@@ -1,5 +1,9 @@
 const $ = id => document.getElementById(id);
 let all = [], qs = [], i = 0, sc = 0, mode = 0, takeN = 16, done = false, st = {};
+let playKind = "quiz"; // "quiz" | "fire"
+let fireLevel = 5;
+const FIRE_MAX = 5;
+const FIRE_QUESTIONS = 20;
 
 const LESSON = {
   1: "善用金錢",
@@ -17,23 +21,8 @@ const sh = a => {
   return a;
 };
 
-fetch("questions.json")
-  .then(r => r.json())
-  .then(d => { all = d; })
-  .catch(e => { console.error(e); alert("題目載入失敗"); });
-
-function show(s) {
-  ["home", "quiz", "result"].forEach(x => $(x).classList.toggle("hide", x !== s));
-  if (s === "result" || s === "home") {
-    if (window.AudioCtl) AudioCtl.onQuizEnd();
-  }
-}
-
-async function start(l, n) {
-  mode = l;
-  takeN = n || (l ? 16 : 28);
-  let pool = l ? all.filter(q => q.lesson === l) : all.slice();
-  qs = sh(pool).slice(0, Math.min(takeN, pool.length)).map(q => {
+function mapPool(pool, n) {
+  return sh(pool).slice(0, Math.min(n, pool.length)).map(q => {
     const raw = q.options.map((t, k) => ({
       t,
       alt: (q.optionAlts && q.optionAlts[k]) || t,
@@ -42,10 +31,76 @@ async function start(l, n) {
     const o = sh(raw);
     return { ...q, o, ans: o.findIndex(x => x.c) };
   });
+}
+
+fetch("questions.json")
+  .then(r => r.json())
+  .then(d => { all = d; })
+  .catch(e => { console.error(e); alert("題目載入失敗"); });
+
+function show(s) {
+  ["home", "quiz", "fire", "result"].forEach(x => {
+    const el = $(x);
+    if (el) el.classList.toggle("hide", x !== s);
+  });
+  if (s === "result" || s === "home") {
+    if (window.AudioCtl) AudioCtl.onQuizEnd();
+  }
+}
+
+async function start(l, n) {
+  playKind = "quiz";
+  mode = l;
+  takeN = n || (l ? 16 : 28);
+  const pool = l ? all.filter(q => q.lesson === l) : all.slice();
+  qs = mapPool(pool, takeN);
   i = 0; sc = 0; st = {}; done = false;
   show("quiz");
   if (window.AudioCtl) await AudioCtl.onQuizStart();
   render();
+}
+
+async function startFire() {
+  playKind = "fire";
+  mode = "fire";
+  takeN = FIRE_QUESTIONS;
+  qs = mapPool(all.slice(), FIRE_QUESTIONS);
+  i = 0; sc = 0; st = {}; done = false;
+  fireLevel = FIRE_MAX;
+  show("fire");
+  $("corridor").classList.remove("flare", "won");
+  updateFireMeter();
+  buildFlames();
+  if (window.AudioCtl) await AudioCtl.onQuizStart();
+  renderFire();
+}
+
+function buildFlames() {
+  const box = $("flames");
+  box.innerHTML = "";
+  for (let n = 0; n < FIRE_MAX; n++) {
+    const d = document.createElement("div");
+    d.className = "flame-bit";
+    box.appendChild(d);
+  }
+  box.dataset.level = String(fireLevel);
+}
+
+function updateFireMeter() {
+  const m = $("fireMeter");
+  m.innerHTML = "";
+  for (let n = 0; n < FIRE_MAX; n++) {
+    const s = document.createElement("span");
+    s.className = "fl" + (n < fireLevel ? " on" : "");
+    s.textContent = "🔥";
+    m.appendChild(s);
+  }
+  $("flames").dataset.level = String(fireLevel);
+  // hide unused flame bits visually
+  [...$("flames").children].forEach((el, idx) => {
+    el.style.opacity = idx < fireLevel ? "1" : "0";
+    el.style.transform = idx < fireLevel ? "" : "scale(0.2)";
+  });
 }
 
 function render() {
@@ -81,6 +136,61 @@ function render() {
   $("next").classList.add("hide");
 }
 
+function renderFire() {
+  const q = qs[i];
+  done = false;
+  $("fireProg").textContent = `${i + 1}/${qs.length}`;
+  $("fireScore").textContent = String(sc);
+  $("fireSrc").textContent = `📖 ${q.source || ""}`;
+  $("fireQ").textContent = q.question;
+  $("fireFb").classList.add("hide");
+  $("fireNext").classList.add("hide");
+  $("corridor").classList.remove("flare");
+  const box = $("fireOpts");
+  box.innerHTML = "";
+  const isImg = q.optionType === "image";
+  q.o.forEach((x, k) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "bubble" + (isImg ? " img-b" : "");
+    if (isImg) {
+      const img = document.createElement("img");
+      img.src = x.t;
+      img.alt = x.alt;
+      b.appendChild(img);
+      const cap = document.createElement("div");
+      cap.className = "cap";
+      cap.textContent = `${k + 1}. ${x.alt}`;
+      b.appendChild(cap);
+    } else {
+      b.textContent = `${k + 1}. ${x.t}`;
+    }
+    b.onclick = () => pickFire(k);
+    box.appendChild(b);
+  });
+}
+
+function sprayWater() {
+  const sp = $("spray");
+  sp.classList.remove("on");
+  void sp.offsetWidth;
+  sp.classList.add("on");
+  const layer = document.createElement("div");
+  layer.className = "spray-drops";
+  for (let n = 0; n < 14; n++) {
+    const d = document.createElement("i");
+    const ang = (Math.random() - 0.5) * 70;
+    const dist = 80 + Math.random() * 140;
+    d.style.setProperty("--dx", Math.sin(ang * Math.PI / 180) * dist + "px");
+    d.style.setProperty("--dy", -Math.cos(ang * Math.PI / 180) * dist + "px");
+    d.style.animationDelay = (Math.random() * 0.12) + "s";
+    layer.appendChild(d);
+  }
+  $("corridor").appendChild(layer);
+  setTimeout(() => layer.remove(), 700);
+  setTimeout(() => sp.classList.remove("on"), 600);
+}
+
 function pick(k) {
   if (done) return;
   done = true;
@@ -104,6 +214,53 @@ function pick(k) {
   $("fill").style.width = ((i + 1) / qs.length) * 100 + "%";
 }
 
+function pickFire(k) {
+  if (done) return;
+  done = true;
+  const q = qs[i];
+  const ok = k === q.ans;
+  const bs = $("fireOpts").children;
+  [...bs].forEach(b => { b.disabled = true; });
+  bs[q.ans].classList.add("ok");
+  if (!ok) bs[k].classList.add("bad");
+  const s = st[q.lesson] || (st[q.lesson] = [0, 0]);
+  s[1]++;
+  if (ok) {
+    sc++;
+    s[0]++;
+    fireLevel = Math.max(0, fireLevel - 1);
+    sprayWater();
+    if (window.AudioCtl) {
+      AudioCtl.playSplash();
+      setTimeout(() => AudioCtl.playCheer(), 180);
+    }
+  } else {
+    fireLevel = Math.min(FIRE_MAX, fireLevel + 1);
+    $("corridor").classList.add("flare");
+    if (window.AudioCtl) AudioCtl.playFireFlare();
+    setTimeout(() => $("corridor").classList.remove("flare"), 400);
+  }
+  updateFireMeter();
+  $("fireScore").textContent = String(sc);
+  const ansText = q.o[q.ans].alt || q.o[q.ans].t;
+  $("fireFb").innerHTML =
+    (ok
+      ? `✅ 答對了！射水救火！火勢 ${fireLevel}/${FIRE_MAX}`
+      : `❌ 答錯了！${fireLevel >= FIRE_MAX ? "火勢仍然猛烈！" : "火勢更大！"}正確：${ansText}`) +
+    "<br>💡 " + q.explanation +
+    `<span class="book">📚 翻書：${q.source || "（見課本／作業）"}</span>`;
+  $("fireFb").classList.remove("hide");
+
+  if (fireLevel === 0) {
+    $("corridor").classList.add("won");
+    $("fireNext").textContent = "看結果 🏆";
+    $("fireNext").classList.remove("hide");
+    return;
+  }
+  $("fireNext").textContent = i + 1 < qs.length ? "下一題 ➜" : "看結果 🏆";
+  $("fireNext").classList.remove("hide");
+}
+
 function next() {
   if (!done) return;
   i++;
@@ -111,15 +268,38 @@ function next() {
   else result();
 }
 
+function nextFire() {
+  if (!done) return;
+  if (fireLevel === 0) {
+    result();
+    return;
+  }
+  i++;
+  if (i < qs.length) renderFire();
+  else result();
+}
+
 function result() {
   if (window.AudioCtl) AudioCtl.onQuizEnd();
   show("result");
-  const r = sc / qs.length;
-  const n = r >= 0.9 ? 3 : r >= 0.7 ? 2 : r >= 0.4 ? 1 : 0;
-  $("stars").textContent = "★".repeat(n) + "☆".repeat(3 - n);
-  $("final").textContent =
-    `答對 ${sc} / ${qs.length} 題（${Math.round(r * 100)}%）` +
-    ["　繼續努力！", "　不錯！", "　很好！", "　太棒了！"][n];
+  if (playKind === "fire") {
+    const cleared = FIRE_MAX - fireLevel;
+    const win = fireLevel === 0;
+    $("resultTitle").textContent = win ? "🚒 大火救熄了！" : "🚒 救火結束";
+    const n = win ? 3 : cleared >= 3 ? 2 : cleared >= 1 ? 1 : 0;
+    $("stars").textContent = "★".repeat(n) + "☆".repeat(3 - n);
+    $("final").textContent = win
+      ? `太棒了！答對 ${sc} 題，成功把 ${FIRE_MAX} 格火全部救熄！`
+      : `答對 ${sc} / ${qs.length} 題，救熄了 ${cleared}/${FIRE_MAX} 格火。再試一次把火救清！`;
+  } else {
+    $("resultTitle").textContent = "挑戰完成！";
+    const r = sc / qs.length;
+    const n = r >= 0.9 ? 3 : r >= 0.7 ? 2 : r >= 0.4 ? 1 : 0;
+    $("stars").textContent = "★".repeat(n) + "☆".repeat(3 - n);
+    $("final").textContent =
+      `答對 ${sc} / ${qs.length} 題（${Math.round(r * 100)}%）` +
+      ["　繼續努力！", "　不錯！", "　很好！", "　太棒了！"][n];
+  }
   $("per").innerHTML = Object.keys(st)
     .sort()
     .map(l => `<div><span>第${l}課 ${LESSON[l] || ""}</span><span>${st[l][0]} / ${st[l][1]}</span></div>`)
@@ -129,17 +309,28 @@ function result() {
 document.querySelectorAll(".mode").forEach(b => {
   b.onclick = () => start(+b.dataset.l, +b.dataset.n);
 });
+$("fireStart").onclick = () => startFire();
 $("next").onclick = next;
-$("again").onclick = () => start(mode, takeN);
+$("fireNext").onclick = nextFire;
+$("fireHome").onclick = () => show("home");
+$("again").onclick = () => {
+  if (playKind === "fire") startFire();
+  else start(mode, takeN);
+};
 $("home2").onclick = () => show("home");
 
 document.addEventListener("keydown", e => {
-  if ($("quiz").classList.contains("hide")) return;
-  if (e.key >= "1" && e.key <= "4" && qs[i] && +e.key <= qs[i].o.length) pick(+e.key - 1);
-  else if (e.key === "Enter" || e.key === " ") next();
+  if (!$("quiz").classList.contains("hide")) {
+    if (e.key >= "1" && e.key <= "4" && qs[i] && +e.key <= qs[i].o.length) pick(+e.key - 1);
+    else if (e.key === "Enter" || e.key === " ") next();
+  } else if (!$("fire").classList.contains("hide")) {
+    if (e.key >= "1" && e.key <= "4" && qs[i] && +e.key <= qs[i].o.length) pickFire(+e.key - 1);
+    else if (e.key === "Enter" || e.key === " ") nextFire();
+  }
 });
 
-/* Audio: unlock on first gesture; welcome SFX; mute toggle */
+window.__p2quiz = { getQs: () => qs, getFire: () => fireLevel, pickFire, startFire };
+
 (function initAudio() {
   if (!window.AudioCtl) return;
   AudioCtl.syncMuteBtn();
@@ -159,7 +350,6 @@ document.addEventListener("keydown", e => {
     unlockedOnce = true;
     AudioCtl.unlockAndWelcome();
   };
-  // Try autoplay; fall back to first tap (browser policy)
   AudioCtl.ensure().then(ok => {
     if (ok && !AudioCtl.muted) AudioCtl.playWelcome();
   }).catch(() => {});

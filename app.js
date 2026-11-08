@@ -1,3 +1,5 @@
+import Fire3D from './js/fire3d.js';
+
 const $ = id => document.getElementById(id);
 let all = [], qs = [], i = 0, sc = 0, mode = 0, takeN = 16, done = false, st = {};
 let playKind = "quiz"; // "quiz" | "fire"
@@ -45,6 +47,11 @@ function show(s) {
   });
   if (s === "result" || s === "home") {
     if (window.AudioCtl) AudioCtl.onQuizEnd();
+    if (s === "home") {
+      try { Fire3D.dispose(); } catch (_) {}
+      const banner = $("fireWonBanner");
+      if (banner) banner.classList.add("hide");
+    }
   }
 }
 
@@ -69,21 +76,18 @@ async function startFire() {
   fireLevel = FIRE_MAX;
   show("fire");
   $("corridor").classList.remove("flare", "won");
+  const banner = $("fireWonBanner");
+  if (banner) banner.classList.add("hide");
   updateFireMeter();
-  buildFlames();
+  try {
+    Fire3D.init($("fire3d"));
+    Fire3D.resetWin();
+    Fire3D.setFireLevel(fireLevel);
+  } catch (e) {
+    console.error("Fire3D init failed", e);
+  }
   if (window.AudioCtl) await AudioCtl.onQuizStart();
   renderFire();
-}
-
-function buildFlames() {
-  const box = $("flames");
-  box.innerHTML = "";
-  for (let n = 0; n < FIRE_MAX; n++) {
-    const d = document.createElement("div");
-    d.className = "flame-bit";
-    box.appendChild(d);
-  }
-  box.dataset.level = String(fireLevel);
 }
 
 function updateFireMeter() {
@@ -95,12 +99,7 @@ function updateFireMeter() {
     s.textContent = "🔥";
     m.appendChild(s);
   }
-  $("flames").dataset.level = String(fireLevel);
-  // hide unused flame bits visually
-  [...$("flames").children].forEach((el, idx) => {
-    el.style.opacity = idx < fireLevel ? "1" : "0";
-    el.style.transform = idx < fireLevel ? "" : "scale(0.2)";
-  });
+  try { Fire3D.setFireLevel(fireLevel); } catch (_) {}
 }
 
 function render() {
@@ -170,27 +169,6 @@ function renderFire() {
   });
 }
 
-function sprayWater() {
-  const sp = $("spray");
-  sp.classList.remove("on");
-  void sp.offsetWidth;
-  sp.classList.add("on");
-  const layer = document.createElement("div");
-  layer.className = "spray-drops";
-  for (let n = 0; n < 14; n++) {
-    const d = document.createElement("i");
-    const ang = (Math.random() - 0.5) * 70;
-    const dist = 80 + Math.random() * 140;
-    d.style.setProperty("--dx", Math.sin(ang * Math.PI / 180) * dist + "px");
-    d.style.setProperty("--dy", -Math.cos(ang * Math.PI / 180) * dist + "px");
-    d.style.animationDelay = (Math.random() * 0.12) + "s";
-    layer.appendChild(d);
-  }
-  $("corridor").appendChild(layer);
-  setTimeout(() => layer.remove(), 700);
-  setTimeout(() => sp.classList.remove("on"), 600);
-}
-
 function pick(k) {
   if (done) return;
   done = true;
@@ -229,7 +207,7 @@ function pickFire(k) {
     sc++;
     s[0]++;
     fireLevel = Math.max(0, fireLevel - 1);
-    sprayWater();
+    try { Fire3D.spray(); } catch (_) {}
     if (window.AudioCtl) {
       AudioCtl.playSplash();
       setTimeout(() => AudioCtl.playCheer(), 180);
@@ -237,6 +215,7 @@ function pickFire(k) {
   } else {
     fireLevel = Math.min(FIRE_MAX, fireLevel + 1);
     $("corridor").classList.add("flare");
+    try { Fire3D.flare(); } catch (_) {}
     if (window.AudioCtl) AudioCtl.playFireFlare();
     setTimeout(() => $("corridor").classList.remove("flare"), 400);
   }
@@ -253,6 +232,9 @@ function pickFire(k) {
 
   if (fireLevel === 0) {
     $("corridor").classList.add("won");
+    try { Fire3D.win(); } catch (_) {}
+    const banner = $("fireWonBanner");
+    if (banner) banner.classList.remove("hide");
     $("fireNext").textContent = "看結果 🏆";
     $("fireNext").classList.remove("hide");
     return;

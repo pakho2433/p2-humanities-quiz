@@ -5,6 +5,14 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>二上人文問答溫習 · 快樂的生活</title>
   <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
 </head>
 <body>
 <button type="button" id="muteBtn" class="mute" aria-label="靜音" title="靜音">🔊</button>
@@ -38,7 +46,7 @@
     <button id="next" class="big next hide">下一題 ➜</button>
   </section>
 
-  <!-- 救火模式：第一人稱走廊 -->
+  <!-- 救火模式：Three.js 第一人稱走廊 -->
   <section id="fire" class="fire-wrap hide" aria-label="救火挑戰">
     <div class="fire-hud">
       <button type="button" id="fireHome" class="fire-hud-btn" title="返回">🏠</button>
@@ -46,21 +54,9 @@
       <div class="fire-score"><span id="fireProg">1/20</span> · ⭐ <span id="fireScore">0</span></div>
     </div>
     <div class="corridor" id="corridor">
-      <div class="ceil"></div>
-      <div class="wall wall-l"></div>
-      <div class="wall wall-r"></div>
-      <div class="floor"></div>
-      <div class="exit-sign">出口 →</div>
-      <div class="picture"></div>
-      <div class="flames" id="flames"></div>
-      <div class="spray" id="spray" aria-hidden="true"></div>
+      <div id="fire3d" class="fire3d" aria-hidden="true"></div>
       <div class="bubbles" id="fireOpts"></div>
-      <div class="hose">
-        <div class="glove g-l"></div>
-        <div class="glove g-r"></div>
-        <div class="hose-body"></div>
-        <div class="nozzle"></div>
-      </div>
+      <div id="fireWonBanner" class="won-banner hide">💧 火救熄了！</div>
     </div>
     <div class="fire-panel">
       <p id="fireSrc" class="src"></p>
@@ -80,6 +76,6 @@
   </section>
 </main>
 <script src="audio.js"></script>
-<script src="app.js"></script>
+<script type="module" src="app.js"></script>
 </body>
 </html>

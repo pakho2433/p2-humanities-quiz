@@ -508,10 +508,10 @@ function buildZone(i) {
 function buildHose() {
   hoseGroup = new THREE.Group();
   camera.add(hoseGroup);
-  // Lower + tip pitched up so players see hose body + nozzle from above (not barrel-on circle)
-  hoseGroup.position.set(0.05, -0.32, -0.45);
-  hoseGroup.rotation.set(-0.55, 0.08, 0.05);
-  hoseGroup.scale.setScalar(1.45);
+  // FPS viewmodel: see red hose + silver nozzle + gloves without filling the frame
+  hoseGroup.position.set(0.02, -0.38, -0.52);
+  hoseGroup.rotation.set(-0.28, 0.04, 0.02);
+  hoseGroup.scale.setScalar(1.15);
 
   const hoseMap = rubberHoseTex();
   const hoseMat = new THREE.MeshStandardMaterial({
@@ -766,9 +766,9 @@ function tick(dt) {
   const t = clock.elapsedTime;
 
   if (hoseGroup) {
-    hoseGroup.rotation.x = -0.55 + Math.sin(t * 1.7) * 0.02 + hoseKick;
-    hoseGroup.rotation.z = 0.05 + Math.sin(t * 1.2) * 0.015;
-    hoseGroup.position.y = -0.32 + Math.sin(t * 2.3) * 0.01;
+    hoseGroup.rotation.x = -0.28 + Math.sin(t * 1.7) * 0.02 + hoseKick;
+    hoseGroup.rotation.z = 0.02 + Math.sin(t * 1.2) * 0.012;
+    hoseGroup.position.y = -0.38 + Math.sin(t * 2.3) * 0.008;
     if (walking) {
       hoseGroup.rotation.x += Math.sin(t * 14) * 0.015;
       hoseGroup.position.y += Math.abs(Math.sin(walkT / walkDur * Math.PI)) * 0.02;

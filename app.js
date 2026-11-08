@@ -24,9 +24,12 @@ fetch("questions.json")
 
 function show(s) {
   ["home", "quiz", "result"].forEach(x => $(x).classList.toggle("hide", x !== s));
+  if (s === "result" || s === "home") {
+    if (window.AudioCtl) AudioCtl.onQuizEnd();
+  }
 }
 
-function start(l, n) {
+async function start(l, n) {
   mode = l;
   takeN = n || (l ? 16 : 28);
   let pool = l ? all.filter(q => q.lesson === l) : all.slice();
@@ -41,6 +44,7 @@ function start(l, n) {
   });
   i = 0; sc = 0; st = {}; done = false;
   show("quiz");
+  if (window.AudioCtl) await AudioCtl.onQuizStart();
   render();
 }
 
@@ -108,6 +112,7 @@ function next() {
 }
 
 function result() {
+  if (window.AudioCtl) AudioCtl.onQuizEnd();
   show("result");
   const r = sc / qs.length;
   const n = r >= 0.9 ? 3 : r >= 0.7 ? 2 : r >= 0.4 ? 1 : 0;
@@ -133,3 +138,32 @@ document.addEventListener("keydown", e => {
   if (e.key >= "1" && e.key <= "4" && qs[i] && +e.key <= qs[i].o.length) pick(+e.key - 1);
   else if (e.key === "Enter" || e.key === " ") next();
 });
+
+/* Audio: unlock on first gesture; welcome SFX; mute toggle */
+(function initAudio() {
+  if (!window.AudioCtl) return;
+  AudioCtl.syncMuteBtn();
+  const muteBtn = $("muteBtn");
+  if (muteBtn) {
+    muteBtn.onclick = e => {
+      e.stopPropagation();
+      AudioCtl.toggleMute();
+      AudioCtl.ensure().then(() => {
+        if (!AudioCtl.muted && !AudioCtl.welcomePlayed) AudioCtl.playWelcome();
+      });
+    };
+  }
+  let unlockedOnce = false;
+  const unlock = () => {
+    if (unlockedOnce) return;
+    unlockedOnce = true;
+    AudioCtl.unlockAndWelcome();
+  };
+  // Try autoplay; fall back to first tap (browser policy)
+  AudioCtl.ensure().then(ok => {
+    if (ok && !AudioCtl.muted) AudioCtl.playWelcome();
+  }).catch(() => {});
+  ["pointerdown", "touchstart", "keydown", "click"].forEach(ev => {
+    document.addEventListener(ev, unlock, { once: true, passive: true });
+  });
+})();

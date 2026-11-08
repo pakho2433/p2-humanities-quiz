@@ -75,3 +75,12 @@ h2{font-size:clamp(20px,4.5vw,26px);line-height:1.45;margin:8px 0 14px;text-alig
   .opt{font-size:17px}
   .opt.img-opt img{max-height:150px}
 }
+
+.mute{
+  position:fixed;top:12px;right:12px;z-index:50;
+  width:52px;height:52px;border:0;border-radius:50%;
+  background:#fffdf8;box-shadow:0 6px 18px #0004;
+  font-size:26px;cursor:pointer;touch-action:manipulation;
+  line-height:1;
+}
+.mute:active{transform:scale(.94)}

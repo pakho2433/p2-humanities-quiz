@@ -47,7 +47,7 @@
     <button id="next" class="big next hide">下一題 ➜</button>
   </section>
 
-  <!-- 救火模式：Three.js 第一人稱走廊 -->
+  <!-- 救火：3D 走廊在上，題目＋選項只在底部面板 -->
   <section id="fire" class="fire-wrap hide" aria-label="救火挑戰">
     <div class="fire-hud">
       <button type="button" id="fireHome" class="fire-hud-btn" title="返回">🏠</button>
@@ -56,12 +56,12 @@
     </div>
     <div class="corridor" id="corridor">
       <div id="fire3d" class="fire3d" aria-hidden="true"></div>
-      <div class="bubbles" id="fireOpts"></div>
       <div id="fireWonBanner" class="won-banner hide">💧 火救熄了！</div>
     </div>
     <div class="fire-panel">
       <p id="fireSrc" class="src"></p>
       <h2 id="fireQ"></h2>
+      <div id="fireOpts" class="fire-opts"></div>
       <div id="fireFb" class="hide"></div>
       <button id="fireNext" class="big next hide">下一題 ➜</button>
     </div>

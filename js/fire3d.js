@@ -1,15 +1,14 @@
 /**
- * 救火挑戰 · Three.js FPS corridor with fire ZONES
- * Correct → spray + extinguish current zone → walk to next zone
- * Wrong → flare, stay. Procedural PBR-ish materials + RoomEnvironment IBL.
+ * 救火挑戰 · Three.js FPS corridor
+ * Shader noise flames + particles + steam; correct → spray → extinguish → walk.
  */
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 export const ZONE_COUNT = 5;
-const ZONE_SPACING = 4.4;
-const FIRST_FIRE_Z = -3.6;
-const VIEW_DIST = 3.9; // camera sits this far behind a fire zone
+const ZONE_SPACING = 4.6;
+const FIRST_FIRE_Z = -3.8;
+const VIEW_DIST = 4.0;
 
 const isTouch = matchMedia('(pointer:coarse)').matches || 'ontouchstart' in window;
 const LOW = isTouch || (navigator.hardwareConcurrency || 8) <= 4;
@@ -18,17 +17,17 @@ let renderer, scene, camera, clock, pmrem;
 let root, hoseGroup;
 let zones = [];
 let zoneIndex = 0;
-let sprayPts, sprayData, waterTex, flameTex, smokeTex, steamTex;
+let sprayPts, sprayData, waterTex, smokeTex, steamTex, emberTex;
 let hoseKick = 0;
 let sprayT = 0, flareT = 0;
-let walking = false, walkFrom = 0, walkTo = 0, walkT = 0, walkDur = 1.35;
+let walking = false, walkFrom = 0, walkTo = 0, walkT = 0, walkDur = 1.45;
 let busy = false;
 let animating = false;
 let hostEl = null;
 let resizeObs = null;
-let hemi, keyLight;
 let steamPts = null, steamData = null;
 let jetMesh = null;
+let flameMats = [];
 
 function canvasTex(w, h, draw, srgb = true) {
   const c = document.createElement('canvas');
@@ -51,101 +50,91 @@ function softDot(stops) {
   }, false);
 }
 
-/** Procedural wood albedo + matching normal (approx) */
 function woodMaps() {
   const albedo = canvasTex(1024, 1024, (g, w, h) => {
-    g.fillStyle = '#7a5535';
+    g.fillStyle = '#6e4a2e';
     g.fillRect(0, 0, w, h);
     const plank = 64;
     for (let y = 0; y < h; y += plank) {
-      const shade = 0.82 + Math.random() * 0.22;
-      const r = Math.floor(145 * shade), gg = Math.floor(98 * shade), b = Math.floor(58 * shade);
+      const shade = 0.78 + Math.random() * 0.28;
+      const r = Math.floor(138 * shade), gg = Math.floor(92 * shade), b = Math.floor(52 * shade);
       g.fillStyle = `rgb(${r},${gg},${b})`;
       g.fillRect(0, y, w, plank - 3);
-      // seam
-      g.fillStyle = 'rgba(35,18,8,0.55)';
+      g.fillStyle = 'rgba(28,14,6,0.6)';
       g.fillRect(0, y + plank - 3, w, 3);
-      // knots
-      if (Math.random() > 0.55) {
+      if (Math.random() > 0.5) {
         const kx = 40 + Math.random() * (w - 80);
         const ky = y + 12 + Math.random() * (plank - 24);
-        const kg = g.createRadialGradient(kx, ky, 1, kx, ky, 14);
-        kg.addColorStop(0, 'rgba(90,50,20,0.55)');
-        kg.addColorStop(1, 'rgba(90,50,20,0)');
+        const kg = g.createRadialGradient(kx, ky, 1, kx, ky, 16);
+        kg.addColorStop(0, 'rgba(70,38,14,0.65)');
+        kg.addColorStop(1, 'rgba(70,38,14,0)');
         g.fillStyle = kg;
-        g.beginPath(); g.ellipse(kx, ky, 16, 9, Math.random(), 0, Math.PI * 2); g.fill();
+        g.beginPath(); g.ellipse(kx, ky, 18, 10, Math.random(), 0, Math.PI * 2); g.fill();
       }
-      // grain lines
-      g.strokeStyle = 'rgba(55,30,12,0.18)';
-      g.lineWidth = 1.2;
-      for (let i = 0; i < 14; i++) {
+      g.strokeStyle = 'rgba(45,24,10,0.22)';
+      g.lineWidth = 1.3;
+      for (let i = 0; i < 16; i++) {
         g.beginPath();
-        const yy = y + 5 + Math.random() * (plank - 10);
+        const yy = y + 4 + Math.random() * (plank - 8);
         g.moveTo(0, yy);
-        for (let x = 0; x <= w; x += 24) g.lineTo(x, yy + Math.sin(x * 0.035 + i + y) * 2.2);
+        for (let x = 0; x <= w; x += 20) g.lineTo(x, yy + Math.sin(x * 0.04 + i + y) * 2.4);
         g.stroke();
-      }
-      // nail dots
-      g.fillStyle = 'rgba(30,20,10,0.35)';
-      for (let x = 30; x < w; x += 160) {
-        g.beginPath(); g.arc(x, y + plank / 2, 1.5, 0, Math.PI * 2); g.fill();
       }
     }
   });
   const normal = canvasTex(512, 512, (g, w, h) => {
-    // flat-ish blue normal with plank groove dips
     g.fillStyle = '#8080ff';
     g.fillRect(0, 0, w, h);
     const plank = 32;
     for (let y = 0; y < h; y += plank) {
-      g.fillStyle = '#6060e8';
+      g.fillStyle = '#5a5ae0';
       g.fillRect(0, y + plank - 2, w, 2);
-      g.fillStyle = '#9898ff';
+      g.fillStyle = '#9a9aff';
       g.fillRect(0, y, w, 1);
     }
   }, false);
   const rough = canvasTex(256, 256, (g, w, h) => {
-    g.fillStyle = '#b0b0b0';
+    g.fillStyle = '#a8a8a8';
     g.fillRect(0, 0, w, h);
-    for (let i = 0; i < 2000; i++) {
-      const v = 140 + Math.random() * 80;
+    for (let i = 0; i < 2800; i++) {
+      const v = 120 + Math.random() * 100;
       g.fillStyle = `rgb(${v},${v},${v})`;
       g.fillRect(Math.random() * w, Math.random() * h, 2, 2);
     }
   }, false);
-  albedo.wrapS = albedo.wrapT = THREE.RepeatWrapping;
-  normal.wrapS = normal.wrapT = THREE.RepeatWrapping;
-  rough.wrapS = rough.wrapT = THREE.RepeatWrapping;
-  albedo.repeat.set(3, 12);
-  normal.repeat.set(3, 12);
-  rough.repeat.set(3, 12);
+  [albedo, normal, rough].forEach((t) => {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(3, 14);
+  });
   return { albedo, normal, rough };
 }
 
 function wallMaps() {
   const albedo = canvasTex(512, 512, (g, w, h) => {
-    // plaster upper
-    g.fillStyle = '#f0e4cf';
+    g.fillStyle = '#efe4d0';
     g.fillRect(0, 0, w, h * 0.62);
-    for (let i = 0; i < 1200; i++) {
-      g.fillStyle = `rgba(170,140,100,${Math.random() * 0.06})`;
+    for (let i = 0; i < 1600; i++) {
+      g.fillStyle = `rgba(160,130,95,${Math.random() * 0.07})`;
       g.fillRect(Math.random() * w, Math.random() * h * 0.62, 3, 3);
     }
-    // chair rail
+    // soot near floor hint
+    const soot = g.createLinearGradient(0, h * 0.5, 0, h * 0.62);
+    soot.addColorStop(0, 'rgba(40,20,10,0)');
+    soot.addColorStop(1, 'rgba(40,20,10,0.12)');
+    g.fillStyle = soot;
+    g.fillRect(0, h * 0.5, w, h * 0.12);
     g.fillStyle = '#5d4037';
     g.fillRect(0, h * 0.60, w, h * 0.04);
     g.fillStyle = '#8d6e63';
     g.fillRect(0, h * 0.60, w, 3);
-    // wainscot
     g.fillStyle = '#ebe0c8';
     g.fillRect(0, h * 0.64, w, h * 0.36);
-    g.strokeStyle = 'rgba(60,35,20,0.4)';
+    g.strokeStyle = 'rgba(60,35,20,0.42)';
     g.lineWidth = 3;
-    const panels = 2;
-    for (let p = 0; p < panels; p++) {
-      const x = 16 + p * (w / panels);
-      g.strokeRect(x, h * 0.68, w / panels - 32, h * 0.26);
-      g.strokeRect(x + 8, h * 0.70, w / panels - 48, h * 0.22);
+    for (let p = 0; p < 2; p++) {
+      const x = 16 + p * (w / 2);
+      g.strokeRect(x, h * 0.68, w / 2 - 32, h * 0.26);
+      g.strokeRect(x + 8, h * 0.70, w / 2 - 48, h * 0.22);
     }
   });
   const normal = canvasTex(256, 256, (g, w, h) => {
@@ -153,10 +142,6 @@ function wallMaps() {
     g.fillRect(0, 0, w, h);
     g.fillStyle = '#7070ee';
     g.fillRect(0, h * 0.60, w, h * 0.04);
-    g.strokeStyle = '#6060e0';
-    g.lineWidth = 2;
-    g.strokeRect(20, h * 0.68, w / 2 - 40, h * 0.26);
-    g.strokeRect(w / 2 + 20, h * 0.68, w / 2 - 40, h * 0.26);
   }, false);
   albedo.wrapS = albedo.wrapT = THREE.RepeatWrapping;
   normal.wrapS = normal.wrapT = THREE.RepeatWrapping;
@@ -167,38 +152,16 @@ function wallMaps() {
 
 function ceilingMap() {
   const t = canvasTex(256, 256, (g, w, h) => {
-    g.fillStyle = '#e6dcc8';
+    g.fillStyle = '#e8deca';
     g.fillRect(0, 0, w, h);
-    g.strokeStyle = 'rgba(0,0,0,0.04)';
+    g.strokeStyle = 'rgba(0,0,0,0.045)';
     for (let x = 0; x < w; x += 64) {
       g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke();
     }
   });
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.repeat.set(2, 8);
+  t.repeat.set(2, 10);
   return t;
-}
-
-function makeFlameTex() {
-  return canvasTex(128, 160, (g, w, h) => {
-    g.clearRect(0, 0, w, h);
-    const layers = [
-      [0.5, 0.78, w * 0.48, ['rgba(255,255,230,1)', 'rgba(255,200,60,0.95)', 'rgba(255,90,10,0.7)', 'rgba(180,20,0,0)']],
-      [0.42, 0.7, w * 0.36, ['rgba(255,255,200,0.9)', 'rgba(255,160,40,0.75)', 'rgba(220,40,0,0)']],
-      [0.58, 0.72, w * 0.34, ['rgba(255,255,210,0.85)', 'rgba(255,140,30,0.7)', 'rgba(200,30,0,0)']]
-    ];
-    layers.forEach(([cx, cy, rad, cols]) => {
-      const grd = g.createRadialGradient(w * cx, h * cy, 2, w * cx, h * 0.4, rad);
-      cols.forEach((c, i) => grd.addColorStop(i / (cols.length - 1), c));
-      g.fillStyle = grd;
-      g.beginPath();
-      g.moveTo(w * cx, h * 0.06);
-      g.bezierCurveTo(w * (cx + 0.28), h * 0.3, w * (cx + 0.38), h * 0.55, w * (cx + 0.2), h * 0.9);
-      g.bezierCurveTo(w * cx, h * 0.98, w * (cx - 0.2), h * 0.9, w * (cx - 0.2), h * 0.9);
-      g.bezierCurveTo(w * (cx - 0.38), h * 0.55, w * (cx - 0.28), h * 0.3, w * cx, h * 0.06);
-      g.fill();
-    });
-  }, false);
 }
 
 function exitSignTex() {
@@ -231,26 +194,21 @@ function pictureTex() {
     g.quadraticCurveTo(w * 0.25, h * 0.32, w * 0.5, h * 0.55);
     g.quadraticCurveTo(w * 0.72, h * 0.38, w, h * 0.52);
     g.lineTo(w, h); g.lineTo(0, h); g.fill();
-    g.fillStyle = '#43a047';
-    g.beginPath();
-    g.moveTo(0, h * 0.72);
-    g.quadraticCurveTo(w * 0.4, h * 0.55, w, h * 0.7);
-    g.lineTo(w, h); g.lineTo(0, h); g.fill();
   });
 }
 
 function rubberHoseTex() {
   return canvasTex(128, 128, (g, w, h) => {
     const grd = g.createLinearGradient(0, 0, w, 0);
-    grd.addColorStop(0, '#7f1010');
-    grd.addColorStop(0.35, '#e53935');
-    grd.addColorStop(0.5, '#ff6659');
-    grd.addColorStop(0.65, '#c62828');
-    grd.addColorStop(1, '#6d0b0b');
+    grd.addColorStop(0, '#6a0a0a');
+    grd.addColorStop(0.3, '#d32f2f');
+    grd.addColorStop(0.5, '#ff5252');
+    grd.addColorStop(0.7, '#b71c1c');
+    grd.addColorStop(1, '#4a0505');
     g.fillStyle = grd;
     g.fillRect(0, 0, w, h);
-    g.fillStyle = 'rgba(0,0,0,0.18)';
-    for (let y = 0; y < h; y += 10) g.fillRect(0, y, w, 3);
+    g.fillStyle = 'rgba(0,0,0,0.2)';
+    for (let y = 0; y < h; y += 9) g.fillRect(0, y, w, 3);
   });
 }
 
@@ -258,13 +216,29 @@ function metalTex() {
   return canvasTex(128, 128, (g, w, h) => {
     const grd = g.createLinearGradient(0, 0, w, h);
     grd.addColorStop(0, '#fafafa');
-    grd.addColorStop(0.4, '#90a4ae');
-    grd.addColorStop(0.7, '#eceff1');
-    grd.addColorStop(1, '#607d8b');
+    grd.addColorStop(0.35, '#90a4ae');
+    grd.addColorStop(0.65, '#eceff1');
+    grd.addColorStop(1, '#546e7a');
     g.fillStyle = grd;
     g.fillRect(0, 0, w, h);
-    g.fillStyle = 'rgba(255,255,255,0.25)';
-    g.fillRect(w * 0.2, 0, 8, h);
+    g.fillStyle = 'rgba(255,255,255,0.3)';
+    g.fillRect(w * 0.22, 0, 7, h);
+  });
+}
+
+function leatherTex() {
+  return canvasTex(128, 128, (g, w, h) => {
+    g.fillStyle = '#f9a825';
+    g.fillRect(0, 0, w, h);
+    for (let i = 0; i < 900; i++) {
+      const v = 180 + Math.random() * 60;
+      g.fillStyle = `rgba(${v},${Math.floor(v * 0.7)},20,0.25)`;
+      g.fillRect(Math.random() * w, Math.random() * h, 3, 2);
+    }
+    g.strokeStyle = 'rgba(120,70,0,0.2)';
+    for (let y = 0; y < h; y += 8) {
+      g.beginPath(); g.moveTo(0, y); g.lineTo(w, y + 2); g.stroke();
+    }
   });
 }
 
@@ -272,12 +246,100 @@ function std(color, rough = 0.6, metal = 0, extra = {}) {
   return new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal, ...extra });
 }
 
-function zoneZ(i) {
-  return FIRST_FIRE_Z - i * ZONE_SPACING;
-}
+function zoneZ(i) { return FIRST_FIRE_Z - i * ZONE_SPACING; }
+function camZForZone(i) { return zoneZ(i) + VIEW_DIST; }
 
-function camZForZone(i) {
-  return zoneZ(i) + VIEW_DIST;
+/** Animated FBM noise flame shader (billboard plane) */
+function createFlameMaterial(seed = 0) {
+  const mat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+    uniforms: {
+      uTime: { value: 0 },
+      uSeed: { value: seed },
+      uIntensity: { value: 1 },
+      uFlicker: { value: 1 }
+    },
+    vertexShader: /* glsl */`
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */`
+      precision mediump float;
+      varying vec2 vUv;
+      uniform float uTime;
+      uniform float uSeed;
+      uniform float uIntensity;
+      uniform float uFlicker;
+
+      float hash(vec2 p) {
+        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+      }
+      float noise(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        float a = hash(i);
+        float b = hash(i + vec2(1.0, 0.0));
+        float c = hash(i + vec2(0.0, 1.0));
+        float d = hash(i + vec2(1.0, 1.0));
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+      }
+      float fbm(vec2 p) {
+        float v = 0.0;
+        float a = 0.5;
+        for (int i = 0; i < 5; i++) {
+          v += a * noise(p);
+          p *= 2.05;
+          a *= 0.5;
+        }
+        return v;
+      }
+
+      void main() {
+        vec2 uv = vUv;
+        // taper flame silhouette
+        float width = 0.55 * (1.0 - uv.y * 0.85);
+        float edge = abs(uv.x - 0.5);
+        float shape = 1.0 - smoothstep(width * 0.55, width, edge);
+        shape *= smoothstep(0.0, 0.08, uv.y) * (1.0 - smoothstep(0.88, 1.0, uv.y));
+
+        float t = uTime * 1.8 + uSeed;
+        vec2 nUV = vec2(uv.x * 3.2 + uSeed, uv.y * 2.4 - t);
+        float n = fbm(nUV);
+        float n2 = fbm(nUV * 1.7 + 3.1);
+        float flame = shape * (0.55 + 0.55 * n) * (0.7 + 0.4 * n2);
+        flame *= uIntensity * uFlicker;
+        flame = clamp(flame, 0.0, 1.5);
+
+        // color: white core → yellow → orange → deep red
+        vec3 cCore = vec3(1.0, 0.98, 0.85);
+        vec3 cYellow = vec3(1.0, 0.78, 0.18);
+        vec3 cOrange = vec3(1.0, 0.35, 0.05);
+        vec3 cRed = vec3(0.55, 0.05, 0.0);
+        float h = uv.y + n * 0.15;
+        vec3 col = mix(cCore, cYellow, smoothstep(0.0, 0.28, h));
+        col = mix(col, cOrange, smoothstep(0.25, 0.55, h));
+        col = mix(col, cRed, smoothstep(0.5, 0.9, h));
+        // hot side flickers
+        col += vec3(0.15, 0.05, 0.0) * n2 * (1.0 - h);
+
+        float alpha = clamp(flame * 1.35, 0.0, 1.0);
+        alpha *= shape;
+        // keep a denser core so flame reads as volume, not flat glow
+        alpha = max(alpha, shape * 0.35 * uIntensity);
+        if (alpha < 0.015) discard;
+        gl_FragColor = vec4(col * (1.0 + 0.55 * flame), alpha);
+      }
+    `
+  });
+  flameMats.push(mat);
+  return mat;
 }
 
 function buildCorridor() {
@@ -289,14 +351,14 @@ function buildCorridor() {
     map: wood.albedo,
     normalMap: wood.normal,
     roughnessMap: wood.rough,
-    roughness: 0.72,
-    metalness: 0.04,
-    normalScale: new THREE.Vector2(0.7, 0.7)
+    roughness: 0.7,
+    metalness: 0.05,
+    normalScale: new THREE.Vector2(0.85, 0.85)
   });
-  const corridorLen = ZONE_COUNT * ZONE_SPACING + 10;
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(4.4, corridorLen), floorMat);
+  const corridorLen = ZONE_COUNT * ZONE_SPACING + 12;
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(4.5, corridorLen), floorMat);
   floor.rotation.x = -Math.PI / 2;
-  floor.position.set(0, 0, -corridorLen / 2 + 1.5);
+  floor.position.set(0, 0, -corridorLen / 2 + 1.8);
   floor.receiveShadow = true;
   root.add(floor);
 
@@ -304,107 +366,105 @@ function buildCorridor() {
   const wallMat = new THREE.MeshStandardMaterial({
     map: walls.albedo,
     normalMap: walls.normal,
-    roughness: 0.88,
+    roughness: 0.9,
     metalness: 0,
-    normalScale: new THREE.Vector2(0.45, 0.45)
+    normalScale: new THREE.Vector2(0.5, 0.5)
   });
-  const wallH = 3.3;
+  const wallH = 3.35;
   const left = new THREE.Mesh(new THREE.PlaneGeometry(corridorLen, wallH), wallMat);
   left.rotation.y = Math.PI / 2;
-  left.position.set(-2.2, wallH / 2, -corridorLen / 2 + 1.5);
+  left.position.set(-2.25, wallH / 2, -corridorLen / 2 + 1.8);
   left.receiveShadow = true;
   root.add(left);
   const right = new THREE.Mesh(new THREE.PlaneGeometry(corridorLen, wallH), wallMat.clone());
   right.rotation.y = -Math.PI / 2;
-  right.position.set(2.2, wallH / 2, -corridorLen / 2 + 1.5);
+  right.position.set(2.25, wallH / 2, -corridorLen / 2 + 1.8);
   right.receiveShadow = true;
   root.add(right);
 
   const ceil = new THREE.Mesh(
-    new THREE.PlaneGeometry(4.4, corridorLen),
-    new THREE.MeshStandardMaterial({ map: ceilingMap(), roughness: 0.92, metalness: 0 })
+    new THREE.PlaneGeometry(4.5, corridorLen),
+    new THREE.MeshStandardMaterial({ map: ceilingMap(), roughness: 0.94, metalness: 0 })
   );
   ceil.rotation.x = Math.PI / 2;
-  ceil.position.set(0, wallH, -corridorLen / 2 + 1.5);
+  ceil.position.set(0, wallH, -corridorLen / 2 + 1.8);
   root.add(ceil);
 
-  // Ceiling fixtures + lights along corridor
   for (let i = 0; i < ZONE_COUNT + 3; i++) {
-    const z = 0.5 - i * (ZONE_SPACING * 0.85);
+    const z = 0.8 - i * (ZONE_SPACING * 0.85);
     const fixture = new THREE.Mesh(
-      new THREE.BoxGeometry(0.7, 0.08, 0.7),
-      std(0xf5f5f5, 0.35, 0.15, { emissive: 0xfff8e7, emissiveIntensity: 1.4 })
+      new THREE.BoxGeometry(0.72, 0.07, 0.72),
+      std(0xfafafa, 0.32, 0.18, { emissive: 0xfff3e0, emissiveIntensity: 1.6 })
     );
-    fixture.position.set(0, wallH - 0.05, z);
+    fixture.position.set(0, wallH - 0.04, z);
     root.add(fixture);
-    const rim = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.04, 0.78), std(0x455a64, 0.5, 0.4));
-    rim.position.set(0, wallH - 0.02, z);
+    const rim = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.035, 0.8), std(0x37474f, 0.45, 0.45));
+    rim.position.set(0, wallH - 0.01, z);
     root.add(rim);
-    const pl = new THREE.PointLight(0xfff2dd, LOW ? 3.5 : 5.5, 9, 1.5);
-    pl.position.set(0, wallH - 0.25, z);
+    const pl = new THREE.PointLight(0xfff1dc, LOW ? 2.2 : 3.4, 9, 1.6);
+    pl.position.set(0, wallH - 0.28, z);
     root.add(pl);
   }
 
-  // End wall + door
-  const endZ = zoneZ(ZONE_COUNT - 1) - 4.5;
-  const endWall = new THREE.Mesh(new THREE.PlaneGeometry(4.4, wallH), std(0xe8dcc0, 0.9, 0));
+  const endZ = zoneZ(ZONE_COUNT - 1) - 4.8;
+  const endWall = new THREE.Mesh(new THREE.PlaneGeometry(4.5, wallH), std(0xe8dcc0, 0.9, 0));
   endWall.position.set(0, wallH / 2, endZ);
   root.add(endWall);
-  const door = new THREE.Mesh(new THREE.BoxGeometry(1.25, 2.25, 0.1), std(0x5d4037, 0.65, 0.05));
-  door.position.set(0, 1.12, endZ + 0.06);
+  const door = new THREE.Mesh(new THREE.BoxGeometry(1.3, 2.3, 0.1), std(0x5d4037, 0.62, 0.05));
+  door.position.set(0, 1.15, endZ + 0.06);
   door.castShadow = true;
   root.add(door);
-  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.045, 14, 14), std(0xd4af37, 0.28, 0.9));
-  knob.position.set(0.48, 1.05, endZ + 0.12);
+  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.048, 16, 16), std(0xd4af37, 0.25, 0.92));
+  knob.position.set(0.5, 1.05, endZ + 0.13);
   root.add(knob);
   const exit = new THREE.Mesh(
-    new THREE.PlaneGeometry(1.7, 0.58),
+    new THREE.PlaneGeometry(1.75, 0.6),
     new THREE.MeshStandardMaterial({
-      map: exitSignTex(), emissive: 0x2e7d32, emissiveIntensity: 1.2, roughness: 0.4, metalness: 0.1
+      map: exitSignTex(), emissive: 0x2e7d32, emissiveIntensity: 1.35, roughness: 0.38, metalness: 0.1
     })
   );
-  exit.position.set(0, 2.7, endZ + 0.08);
+  exit.position.set(0, 2.75, endZ + 0.08);
   root.add(exit);
-    const exitPl = new THREE.PointLight(0x81c784, 3.5, 8, 1.5);
-  exitPl.position.set(0, 2.6, endZ + 0.6);
+  const exitPl = new THREE.PointLight(0x81c784, 4, 9, 1.4);
+  exitPl.position.set(0, 2.65, endZ + 0.7);
   root.add(exitPl);
 
-  // Pictures + extinguisher props along walls
   for (let i = 0; i < ZONE_COUNT; i++) {
-    const z = zoneZ(i) + 1.6;
-    const frame = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.7, 0.05), std(0x4e342e, 0.55, 0.05));
-    frame.position.set(-2.15, 2.0, z);
+    const z = zoneZ(i) + 1.7;
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.72, 0.05), std(0x4e342e, 0.52, 0.05));
+    frame.position.set(-2.2, 2.05, z);
     frame.rotation.y = Math.PI / 2;
     root.add(frame);
     const pic = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.84, 0.58),
-      new THREE.MeshStandardMaterial({ map: pictureTex(), roughness: 0.45 })
+      new THREE.PlaneGeometry(0.86, 0.6),
+      new THREE.MeshStandardMaterial({ map: pictureTex(), roughness: 0.42 })
     );
-    pic.position.set(-2.12, 2.0, z);
+    pic.position.set(-2.17, 2.05, z);
     pic.rotation.y = Math.PI / 2;
     root.add(pic);
 
-    // red extinguisher on right wall
     const ext = new THREE.Group();
-    const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.1, 0.55, 14), std(0xc62828, 0.4, 0.2));
+    const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.095, 0.105, 0.58, 16), std(0xc62828, 0.38, 0.25));
     tank.castShadow = true;
     ext.add(tank);
-    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.08, 10), std(0x37474f, 0.35, 0.7));
-    cap.position.y = 0.32;
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.052, 0.09, 12), std(0x263238, 0.32, 0.75));
+    cap.position.y = 0.34;
     ext.add(cap);
-    const hoseBit = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.2, 8), std(0x212121, 0.5, 0.3));
-    hoseBit.rotation.z = 0.8;
-    hoseBit.position.set(0.1, 0.28, 0);
+    const hoseBit = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.22, 8), std(0x212121, 0.48, 0.3));
+    hoseBit.rotation.z = 0.85;
+    hoseBit.position.set(0.11, 0.3, 0);
     ext.add(hoseBit);
-    ext.position.set(2.05, 0.4, z - 0.8);
+    const label = new THREE.Mesh(new THREE.PlaneGeometry(0.12, 0.08), std(0xfffde7, 0.6, 0));
+    label.position.set(0, 0.05, 0.106);
+    ext.add(label);
+    ext.position.set(2.08, 0.42, z - 0.85);
     root.add(ext);
   }
 
-  // skirting
-  const boardMat = std(0x4e342e, 0.65, 0.05);
-  for (const x of [-2.18, 2.18]) {
-    const b = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.14, corridorLen), boardMat);
-    b.position.set(x, 0.07, -corridorLen / 2 + 1.5);
+  const boardMat = std(0x4e342e, 0.62, 0.05);
+  for (const x of [-2.22, 2.22]) {
+    const b = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.15, corridorLen), boardMat);
+    b.position.set(x, 0.075, -corridorLen / 2 + 1.8);
     root.add(b);
   }
 }
@@ -416,91 +476,155 @@ function buildZone(i) {
   root.add(group);
 
   const flames = [];
-  const count = LOW ? 8 : 12;
+  const count = LOW ? 5 : 7;
   for (let n = 0; n < count; n++) {
-    const mat = new THREE.SpriteMaterial({
-      map: flameTex, transparent: true, depthWrite: false,
-      blending: THREE.NormalBlending, opacity: 1
-    });
-    const spr = new THREE.Sprite(mat);
-    const x = (n / (count - 1) - 0.5) * 3.3;
-    const s = 1.25 + Math.random() * 0.8;
-    spr.scale.set(s * 0.95, s * 1.6, 1);
-    spr.position.set(x, s * 0.65, (Math.random() - 0.5) * 0.7);
-    spr.userData = { baseY: spr.position.y, baseS: s, phase: Math.random() * 6.28, speed: 3.5 + Math.random() * 4 };
-    spr.renderOrder = 3;
-    group.add(spr);
-    flames.push(spr);
+    const mat = createFlameMaterial(i * 17.3 + n * 4.1);
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(1.15, 1.9), mat);
+    const x = (n / (count - 1) - 0.5) * 3.1;
+    const s = 0.95 + Math.random() * 0.55;
+    plane.scale.set(s, s * (1.05 + Math.random() * 0.25), 1);
+    plane.position.set(x, 0.95 * s, (Math.random() - 0.5) * 0.55);
+    plane.rotation.y = (Math.random() - 0.5) * 0.35;
+    plane.renderOrder = 4;
+    plane.userData = { baseY: plane.position.y, baseS: s, phase: Math.random() * 6.28, speed: 2.8 + Math.random() * 2.5, mat };
+    group.add(plane);
+    flames.push(plane);
   }
-  for (let n = 0; n < 5; n++) {
-    const mat = new THREE.SpriteMaterial({
-      map: flameTex, transparent: true, depthWrite: false,
-      blending: THREE.AdditiveBlending, opacity: 0.85
-    });
-    const spr = new THREE.Sprite(mat);
-    const s = 0.75 + Math.random() * 0.4;
-    spr.scale.set(s * 0.85, s * 1.35, 1);
-    spr.position.set((n / 4 - 0.5) * 2.6, s * 0.5, -0.55 - Math.random() * 0.35);
-    spr.userData = { baseY: spr.position.y, baseS: s, phase: Math.random() * 6, speed: 4 + Math.random() * 3 };
-    spr.renderOrder = 3;
-    group.add(spr);
-    flames.push(spr);
+  // cross-angle secondary cards for volume
+  for (let n = 0; n < (LOW ? 3 : 4); n++) {
+    const mat = createFlameMaterial(i * 9 + n * 11 + 50);
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 1.7), mat);
+    const s = 0.7 + Math.random() * 0.35;
+    plane.scale.set(s, s * 1.1, 1);
+    plane.position.set((n / 3 - 0.5) * 2.4, 0.75 * s, -0.35 - Math.random() * 0.4);
+    plane.rotation.y = Math.PI / 2.4 + (Math.random() - 0.5) * 0.2;
+    plane.renderOrder = 4;
+    plane.userData = { baseY: plane.position.y, baseS: s, phase: Math.random() * 6, speed: 3.2 + Math.random() * 2, mat };
+    group.add(plane);
+    flames.push(plane);
+  }
+  // opaque-ish orange core billboards (NormalBlending) so fire has body
+  for (let n = 0; n < (LOW ? 2 : 3); n++) {
+    const mat = createFlameMaterial(i * 5 + n * 13 + 90);
+    mat.blending = THREE.NormalBlending;
+    mat.depthWrite = false;
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(0.85, 1.45), mat);
+    const s = 0.85 + Math.random() * 0.25;
+    plane.scale.set(s, s, 1);
+    plane.position.set((n / 2 - 0.5) * 1.6, 0.7 * s, 0.05);
+    plane.renderOrder = 3;
+    plane.userData = { baseY: plane.position.y, baseS: s, phase: Math.random() * 6, speed: 2.5 + Math.random() * 2, mat };
+    group.add(plane);
+    flames.push(plane);
   }
 
+  // floor heat glow
   const glow = new THREE.Mesh(
-    new THREE.PlaneGeometry(3.6, 1.8),
+    new THREE.PlaneGeometry(3.8, 2.0),
     new THREE.MeshBasicMaterial({
-      color: 0xff5722, transparent: true, opacity: 0.42,
+      color: 0xff6a00, transparent: true, opacity: 0.5,
       blending: THREE.AdditiveBlending, depthWrite: false
     })
   );
   glow.rotation.x = -Math.PI / 2;
-  glow.position.y = 0.03;
+  glow.position.y = 0.025;
   glow.name = 'glow';
   group.add(glow);
 
-  // charred floor mark
+  // vertical heat bloom
+  const bloom = new THREE.Mesh(
+    new THREE.PlaneGeometry(3.2, 2.4),
+    new THREE.MeshBasicMaterial({
+      color: 0xff3d00, transparent: true, opacity: 0.18,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide
+    })
+  );
+  bloom.position.set(0, 1.1, 0.2);
+  bloom.name = 'bloom';
+  group.add(bloom);
+
   const scorch = new THREE.Mesh(
-    new THREE.CircleGeometry(1.3, 24),
-    new THREE.MeshStandardMaterial({ color: 0x1a0c06, roughness: 0.95, metalness: 0, transparent: true, opacity: 0.55 })
+    new THREE.CircleGeometry(1.45, 28),
+    new THREE.MeshStandardMaterial({ color: 0x140804, roughness: 0.96, metalness: 0, transparent: true, opacity: 0.62 })
   );
   scorch.rotation.x = -Math.PI / 2;
-  scorch.position.y = 0.015;
+  scorch.position.y = 0.012;
   group.add(scorch);
 
-  const light = new THREE.PointLight(0xff6a00, 12, 11, 1.25);
-  light.position.set(0, 1.3, 0);
+  // debris / charred wood bits
+  for (let d = 0; d < 5; d++) {
+    const bit = new THREE.Mesh(
+      new THREE.BoxGeometry(0.18 + Math.random() * 0.2, 0.05, 0.1 + Math.random() * 0.15),
+      std(0x1a0c06, 0.95, 0)
+    );
+    bit.position.set((Math.random() - 0.5) * 2.2, 0.03, (Math.random() - 0.5) * 0.8);
+    bit.rotation.y = Math.random() * 2;
+    group.add(bit);
+  }
+
+  const light = new THREE.PointLight(0xff5500, 18, 11, 1.15);
+  light.position.set(0, 1.35, 0);
   if (!LOW && i === 0) {
     light.castShadow = true;
     light.shadow.mapSize.set(512, 512);
-    light.shadow.bias = -0.01;
+    light.shadow.bias = -0.012;
   }
   group.add(light);
 
-  const flare = new THREE.PointLight(0xff1744, 0, 12, 1.1);
-  flare.position.set(0, 1.5, 0);
+  const flare = new THREE.PointLight(0xff1744, 0, 13, 1.05);
+  flare.position.set(0, 1.55, 0);
   group.add(flare);
 
-  // local smoke
-  const sn = LOW ? 28 : 45;
+  // smoke
+  const sn = LOW ? 36 : 60;
   const spos = new Float32Array(sn * 3);
   const svel = [];
   for (let k = 0; k < sn; k++) {
-    spos[k * 3] = (Math.random() - 0.5) * 2.8;
-    spos[k * 3 + 1] = Math.random() * 1.8;
-    spos[k * 3 + 2] = (Math.random() - 0.5) * 1.0;
-    svel.push({ vx: (Math.random() - 0.5) * 0.12, vy: 0.4 + Math.random() * 0.5, vz: (Math.random() - 0.5) * 0.08, life: Math.random() });
+    spos[k * 3] = (Math.random() - 0.5) * 2.9;
+    spos[k * 3 + 1] = Math.random() * 2.0;
+    spos[k * 3 + 2] = (Math.random() - 0.5) * 1.1;
+    svel.push({
+      vx: (Math.random() - 0.5) * 0.15,
+      vy: 0.45 + Math.random() * 0.55,
+      vz: (Math.random() - 0.5) * 0.1,
+      life: Math.random()
+    });
   }
   const sgeo = new THREE.BufferGeometry();
   sgeo.setAttribute('position', new THREE.BufferAttribute(spos, 3));
   const smoke = new THREE.Points(sgeo, new THREE.PointsMaterial({
-    map: smokeTex, size: LOW ? 0.5 : 0.65, transparent: true, depthWrite: false,
-    opacity: 0.5, sizeAttenuation: true
+    map: smokeTex, size: LOW ? 0.55 : 0.72, transparent: true, depthWrite: false,
+    opacity: 0.55, sizeAttenuation: true
   }));
-  smoke.position.y = 0.15;
+  smoke.position.y = 0.2;
   group.add(smoke);
 
-  const zone = { i, z, group, flames, glow, light, flare, smoke, spos, svel, sn, alive: true, extinguishT: 0 };
+  // embers
+  const en = LOW ? 18 : 32;
+  const epos = new Float32Array(en * 3);
+  const evel = [];
+  for (let k = 0; k < en; k++) {
+    epos[k * 3] = (Math.random() - 0.5) * 2.4;
+    epos[k * 3 + 1] = 0.3 + Math.random() * 1.5;
+    epos[k * 3 + 2] = (Math.random() - 0.5) * 0.9;
+    evel.push({
+      vx: (Math.random() - 0.5) * 0.25,
+      vy: 0.6 + Math.random() * 1.1,
+      vz: (Math.random() - 0.5) * 0.2
+    });
+  }
+  const egeo = new THREE.BufferGeometry();
+  egeo.setAttribute('position', new THREE.BufferAttribute(epos, 3));
+  const embers = new THREE.Points(egeo, new THREE.PointsMaterial({
+    map: emberTex, size: 0.12, transparent: true, depthWrite: false,
+    blending: THREE.AdditiveBlending, opacity: 0.95, sizeAttenuation: true
+  }));
+  group.add(embers);
+
+  const zone = {
+    i, z, group, flames, glow, bloom, light, flare, smoke, embers,
+    spos, svel, sn, epos, evel, en, alive: true, extinguishT: 0
+  };
   zones.push(zone);
   return zone;
 }
@@ -508,88 +632,101 @@ function buildZone(i) {
 function buildHose() {
   hoseGroup = new THREE.Group();
   camera.add(hoseGroup);
-  // FPS viewmodel: see red hose + silver nozzle + gloves without filling the frame
-  hoseGroup.position.set(0.02, -0.38, -0.52);
-  hoseGroup.rotation.set(-0.28, 0.04, 0.02);
-  hoseGroup.scale.setScalar(1.15);
+  // FPS viewmodel lower-rightish, nozzle aiming into corridor
+  hoseGroup.position.set(0.18, -0.48, -0.62);
+  hoseGroup.rotation.set(-0.22, -0.18, 0.12);
+  hoseGroup.scale.setScalar(1.05);
 
   const hoseMap = rubberHoseTex();
   const hoseMat = new THREE.MeshStandardMaterial({
-    map: hoseMap, roughness: 0.48, metalness: 0.08, color: 0xffffff
+    map: hoseMap, roughness: 0.42, metalness: 0.08, color: 0xffffff
   });
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.095, 0.7, 24), hoseMat);
-  body.rotation.x = Math.PI / 2.3;
-  body.position.set(0, 0.05, 0.22);
+
+  // long red hose body pointing forward (-Z)
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.085, 0.85, 24), hoseMat);
+  body.rotation.x = Math.PI / 2;
+  body.position.set(0, 0.02, 0.28);
   body.castShadow = true;
   hoseGroup.add(body);
-  for (let i = 0; i < 7; i++) {
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.095, 0.015, 8, 22), std(0x8b0000, 0.4, 0.25));
-    ring.position.set(0, 0.05 + i * 0.01, 0.0 + i * 0.09);
-    ring.rotation.x = Math.PI / 2.3;
+
+  for (let i = 0; i < 9; i++) {
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.088, 0.012, 8, 20), std(0x7f0000, 0.4, 0.2));
+    ring.rotation.x = Math.PI / 2;
+    ring.position.set(0, 0.02, -0.05 + i * 0.08);
     hoseGroup.add(ring);
   }
 
   const metalMap = metalTex();
   const nozzleMat = new THREE.MeshStandardMaterial({
-    map: metalMap, roughness: 0.22, metalness: 0.92, envMapIntensity: 1.2
+    map: metalMap, roughness: 0.16, metalness: 0.96, envMapIntensity: 1.4
   });
-  const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.08, 0.22, 22), nozzleMat);
-  nozzle.rotation.x = Math.PI / 2.1;
-  nozzle.position.set(0, 0.16, -0.16);
+  // silver nozzle taper
+  const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.078, 0.28, 22), nozzleMat);
+  nozzle.rotation.x = Math.PI / 2;
+  nozzle.position.set(0, 0.02, -0.28);
   hoseGroup.add(nozzle);
-  const band = new THREE.Mesh(new THREE.TorusGeometry(0.082, 0.012, 8, 20), std(0xffc107, 0.28, 0.88));
-  band.rotation.x = Math.PI / 2.1;
-  band.position.set(0, 0.17, -0.08);
+
+  const band = new THREE.Mesh(new THREE.TorusGeometry(0.08, 0.014, 8, 20), std(0xffc107, 0.22, 0.92));
+  band.rotation.x = Math.PI / 2;
+  band.position.set(0, 0.02, -0.16);
   hoseGroup.add(band);
-  const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.048, 0.12, 20), std(0xffd54f, 0.25, 0.9));
-  tip.rotation.x = Math.PI / 2.1;
-  tip.position.set(0, 0.2, -0.3);
+
+  const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.04, 0.12, 18), std(0xffd54f, 0.2, 0.94));
+  tip.rotation.x = Math.PI / 2;
+  tip.position.set(0, 0.02, -0.46);
   hoseGroup.add(tip);
-  const hole = new THREE.Mesh(new THREE.CircleGeometry(0.022, 16), new THREE.MeshBasicMaterial({ color: 0x050505 }));
-  hole.position.set(0, 0.22, -0.36);
-  hole.lookAt(0, 0.4, -1.5);
+
+  const hole = new THREE.Mesh(
+    new THREE.CircleGeometry(0.016, 16),
+    new THREE.MeshBasicMaterial({ color: 0x030303 })
+  );
+  hole.position.set(0, 0.02, -0.52);
   hoseGroup.add(hole);
 
-  // water jet mesh (shown during spray)
   jetMesh = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.02, 0.055, 1.2, 10, 1, true),
+    new THREE.CylinderGeometry(0.014, 0.05, 1.5, 12, 1, true),
     new THREE.MeshBasicMaterial({
-      color: 0x81d4fa, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide
+      color: 0xb3e5fc, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide
     })
   );
-  jetMesh.rotation.x = Math.PI / 2.05;
-  jetMesh.position.set(0, 0.35, -1.05);
+  jetMesh.rotation.x = Math.PI / 2;
+  jetMesh.position.set(0, 0.05, -1.25);
   jetMesh.visible = false;
   hoseGroup.add(jetMesh);
 
+  const leather = leatherTex();
   function glove(side) {
     const g = new THREE.Group();
-    const y1 = std(0xfbc02d, 0.5, 0.04);
-    const y2 = std(0xf9a825, 0.5, 0.04);
-    const palm = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.11, 0.26), y2);
+    const palmMat = new THREE.MeshStandardMaterial({ map: leather, color: 0xffb300, roughness: 0.55, metalness: 0.03 });
+    const fingerMat = new THREE.MeshStandardMaterial({ map: leather, color: 0xffc107, roughness: 0.52, metalness: 0.03 });
+    // flat palm box
+    const palm = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.07, 0.24), palmMat);
     palm.castShadow = true;
     g.add(palm);
+    // fingers as short cylinders (clearer than capsules in swiftshader)
     for (let i = 0; i < 4; i++) {
-      const f = new THREE.Mesh(new THREE.CapsuleGeometry(0.026, 0.09, 4, 8), y1);
-      f.position.set(-0.07 + i * 0.045, 0.035, -0.18);
-      f.rotation.x = 0.6;
+      const f = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.02, 0.14, 10), fingerMat);
+      f.rotation.x = Math.PI / 2.4;
+      f.position.set(-0.07 + i * 0.045, 0.02, -0.17);
       g.add(f);
     }
-    const thumb = new THREE.Mesh(new THREE.CapsuleGeometry(0.028, 0.075, 4, 8), y1);
-    thumb.position.set(side * 0.13, 0.025, -0.02);
-    thumb.rotation.z = side * 0.95;
-    thumb.rotation.x = 0.35;
+    const thumb = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.02, 0.11, 10), fingerMat);
+    thumb.rotation.z = side * Math.PI / 2.2;
+    thumb.rotation.x = 0.4;
+    thumb.position.set(side * 0.12, 0.015, -0.02);
     g.add(thumb);
-    const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.095, 0.11, 14), std(0x1565c0, 0.45, 0.12));
+    // blue cuff
+    const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.09, 0.1, 14), std(0x1565c0, 0.4, 0.12));
     cuff.rotation.x = Math.PI / 2;
-    cuff.position.set(0, 0, 0.18);
+    cuff.position.set(0, 0, 0.17);
     g.add(cuff);
-    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.095, 0.014, 8, 16), std(0x0d47a1, 0.4, 0.2));
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.09, 0.012, 8, 16), std(0x0d47a1, 0.35, 0.2));
     rim.rotation.x = Math.PI / 2;
-    rim.position.set(0, 0, 0.13);
+    rim.position.set(0, 0, 0.12);
     g.add(rim);
-    g.position.set(side * 0.22, 0.06, 0.26);
-    g.rotation.set(0.55, side * 0.38, side * 0.22);
+    g.position.set(side * 0.2, -0.02, 0.42);
+    g.rotation.set(0.35, side * 0.25, side * 0.15);
     return g;
   }
   hoseGroup.add(glove(-1));
@@ -598,36 +735,34 @@ function buildHose() {
 
 function buildSpray() {
   waterTex = softDot([
-    [0, 'rgba(220,245,255,1)'],
-    [0.3, 'rgba(120,210,255,0.85)'],
-    [1, 'rgba(40,140,255,0)']
+    [0, 'rgba(230,250,255,1)'],
+    [0.25, 'rgba(140,220,255,0.9)'],
+    [1, 'rgba(40,150,255,0)']
   ]);
-  const n = LOW ? 140 : 220;
+  const n = LOW ? 160 : 280;
   const geo = new THREE.BufferGeometry();
   const pos = new Float32Array(n * 3);
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   sprayPts = new THREE.Points(geo, new THREE.PointsMaterial({
-    map: waterTex, size: 0.16, transparent: true, depthWrite: false,
+    map: waterTex, size: 0.15, transparent: true, depthWrite: false,
     blending: THREE.AdditiveBlending, opacity: 0.95, sizeAttenuation: true
   }));
   sprayPts.visible = false;
   camera.add(sprayPts);
-  sprayPts.position.set(0, -0.15, -0.35);
+  sprayPts.position.set(0.18, -0.42, -0.9);
   sprayData = { pos, vel: Array.from({ length: n }, () => new THREE.Vector3()), n, alive: false };
 
-  // steam puff for extinguish
   steamTex = softDot([
-    [0, 'rgba(230,240,255,0.7)'],
-    [0.45, 'rgba(180,200,220,0.3)'],
+    [0, 'rgba(235,245,255,0.75)'],
+    [0.4, 'rgba(180,200,220,0.32)'],
     [1, 'rgba(150,160,180,0)']
   ]);
-  const sn = LOW ? 50 : 80;
+  const sn = LOW ? 60 : 100;
   const spos = new Float32Array(sn * 3);
   const sgeo = new THREE.BufferGeometry();
   sgeo.setAttribute('position', new THREE.BufferAttribute(spos, 3));
   steamPts = new THREE.Points(sgeo, new THREE.PointsMaterial({
-    map: steamTex, size: 0.28, transparent: true, depthWrite: false, opacity: 0, sizeAttenuation: true,
-    blending: THREE.NormalBlending
+    map: steamTex, size: 0.32, transparent: true, depthWrite: false, opacity: 0, sizeAttenuation: true
   }));
   steamPts.visible = false;
   root.add(steamPts);
@@ -635,59 +770,59 @@ function buildSpray() {
 }
 
 function startSprayParticles() {
-  sprayT = 0.85;
-  hoseKick = 0.12;
+  sprayT = 0.95;
+  hoseKick = 0.14;
   sprayPts.visible = true;
   sprayData.alive = true;
   const { pos, vel, n } = sprayData;
   for (let i = 0; i < n; i++) {
-    pos[i * 3] = (Math.random() - 0.5) * 0.04;
-    pos[i * 3 + 1] = (Math.random() - 0.5) * 0.03;
+    pos[i * 3] = (Math.random() - 0.5) * 0.05;
+    pos[i * 3 + 1] = (Math.random() - 0.5) * 0.04;
     pos[i * 3 + 2] = 0;
-    vel[i].set((Math.random() - 0.5) * 0.45, 0.5 + Math.random() * 0.7, -3.5 - Math.random() * 2.5);
+    vel[i].set((Math.random() - 0.5) * 0.55, 0.55 + Math.random() * 0.85, -3.8 - Math.random() * 2.8);
   }
   sprayPts.geometry.attributes.position.needsUpdate = true;
   if (jetMesh) {
     jetMesh.visible = true;
-    jetMesh.material.opacity = 0.55;
+    jetMesh.material.opacity = 0.62;
   }
 }
 
 function startSteam(zone) {
   steamPts.visible = true;
-  steamPts.position.set(0, 0.4, zone.z);
-  steamPts.material.opacity = 0.75;
-  steamData.t = 1.1;
+  steamPts.position.set(0, 0.45, zone.z);
+  steamPts.material.opacity = 0.8;
+  steamData.t = 1.25;
   const { pos, vel, n } = steamData;
   for (let i = 0; i < n; i++) {
-    pos[i * 3] = (Math.random() - 0.5) * 2.5;
-    pos[i * 3 + 1] = Math.random() * 0.4;
-    pos[i * 3 + 2] = (Math.random() - 0.5) * 1.2;
-    vel[i].set((Math.random() - 0.5) * 0.3, 0.8 + Math.random() * 1.1, (Math.random() - 0.5) * 0.25);
+    pos[i * 3] = (Math.random() - 0.5) * 2.6;
+    pos[i * 3 + 1] = Math.random() * 0.5;
+    pos[i * 3 + 2] = (Math.random() - 0.5) * 1.3;
+    vel[i].set((Math.random() - 0.5) * 0.35, 0.9 + Math.random() * 1.2, (Math.random() - 0.5) * 0.3);
   }
   steamPts.geometry.attributes.position.needsUpdate = true;
 }
 
 function extinguishZone(zone) {
   zone.alive = false;
-  zone.extinguishT = 0.9;
+  zone.extinguishT = 1.0;
   startSteam(zone);
   zone.flames.forEach((f) => { f.visible = false; });
   zone.glow.material.opacity = 0;
+  if (zone.bloom) zone.bloom.material.opacity = 0;
   zone.light.intensity = 0;
   zone.smoke.visible = false;
+  if (zone.embers) zone.embers.visible = false;
 }
 
 function remainingFires() {
   return zones.filter((z) => z.alive).length;
 }
 
-function applyCameraToZone(i, instant = true) {
+function applyCameraToZone(i) {
   const z = camZForZone(Math.min(i, ZONE_COUNT - 1));
-  if (instant) {
-    camera.position.set(0, 1.48, z);
-    camera.lookAt(0, 1.1, zoneZ(Math.min(i, ZONE_COUNT - 1)));
-  }
+  camera.position.set(0, 1.5, z);
+  camera.lookAt(0, 1.15, zoneZ(Math.min(i, ZONE_COUNT - 1)));
   return z;
 }
 
@@ -696,17 +831,13 @@ function beginWalk(toIndex) {
   walkFrom = camera.position.z;
   walkTo = camZForZone(toIndex);
   walkT = 0;
-  walkDur = 1.35;
+  walkDur = 1.45;
 }
 
 function easeInOut(t) {
   return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
 }
 
-/**
- * Correct answer sequence: spray → extinguish current → walk to next (if any)
- * Resolves when ready for next question UI.
- */
 export function playCorrect() {
   if (!zones.length) return Promise.resolve({ remaining: 0, walked: false, won: false, error: 'no-zones' });
   if (busy) return Promise.resolve({ remaining: remainingFires(), walked: false, won: remainingFires() === 0 });
@@ -714,21 +845,18 @@ export function playCorrect() {
   const zone = zones[zoneIndex];
   return new Promise((resolve) => {
     startSprayParticles();
-    // hit fire after short delay
     setTimeout(() => {
       if (zone && zone.alive) extinguishZone(zone);
-    }, 380);
+    }, 400);
 
     const afterSpray = () => {
       const left = remainingFires();
       if (left === 0) {
         busy = false;
-        // cool fog
-        if (scene.fog) { scene.fog.color.set(0x4fc3f7); scene.fog.density = 0.018; }
+        if (scene.fog) { scene.fog.color.set(0x4fc3f7); scene.fog.density = 0.016; }
         resolve({ remaining: 0, walked: false, won: true });
         return;
       }
-      // advance to next alive zone (should be zoneIndex+1)
       const next = zoneIndex + 1;
       if (next < ZONE_COUNT) {
         zoneIndex = next;
@@ -739,23 +867,23 @@ export function playCorrect() {
             busy = false;
             resolve({ remaining: remainingFires(), walked: true, won: false });
           }
-        }, 50);
+        }, 40);
       } else {
         busy = false;
         resolve({ remaining: left, walked: false, won: left === 0 });
       }
     };
-    setTimeout(afterSpray, 900);
+    setTimeout(afterSpray, 1000);
   });
 }
 
 export function playWrong() {
   const zone = zones[zoneIndex];
   if (!zone || !zone.alive) return;
-  flareT = 0.5;
-  hoseKick = -0.08;
-  zone.flare.intensity = 20;
-  zone.group.scale.setScalar(1.18);
+  flareT = 0.55;
+  hoseKick = -0.09;
+  zone.flare.intensity = 24;
+  zone.group.scale.setScalar(1.2);
 }
 
 export function getZoneIndex() { return zoneIndex; }
@@ -765,76 +893,98 @@ export function isBusy() { return busy || walking; }
 function tick(dt) {
   const t = clock.elapsedTime;
 
+  flameMats.forEach((m) => {
+    m.uniforms.uTime.value = t;
+    m.uniforms.uFlicker.value = 0.88 + Math.sin(t * 11.0 + m.uniforms.uSeed.value) * 0.12;
+  });
+
   if (hoseGroup) {
-    hoseGroup.rotation.x = -0.28 + Math.sin(t * 1.7) * 0.02 + hoseKick;
-    hoseGroup.rotation.z = 0.02 + Math.sin(t * 1.2) * 0.012;
-    hoseGroup.position.y = -0.38 + Math.sin(t * 2.3) * 0.008;
+    hoseGroup.rotation.x = -0.22 + Math.sin(t * 1.7) * 0.018 + hoseKick;
+    hoseGroup.rotation.z = 0.12 + Math.sin(t * 1.2) * 0.01;
+    hoseGroup.position.y = -0.48 + Math.sin(t * 2.3) * 0.008;
     if (walking) {
-      hoseGroup.rotation.x += Math.sin(t * 14) * 0.015;
-      hoseGroup.position.y += Math.abs(Math.sin(walkT / walkDur * Math.PI)) * 0.02;
+      hoseGroup.rotation.x += Math.sin(t * 14) * 0.016;
+      hoseGroup.position.y += Math.abs(Math.sin(walkT / walkDur * Math.PI)) * 0.025;
     }
   }
   hoseKick *= Math.max(0, 1 - dt * 8);
 
-  // animate alive zones
   zones.forEach((zone) => {
     if (!zone.alive) {
       if (zone.extinguishT > 0) {
         zone.extinguishT -= dt;
-        zone.group.scale.setScalar(Math.max(0.01, zone.extinguishT / 0.9));
+        zone.group.scale.setScalar(Math.max(0.01, zone.extinguishT / 1.0));
       }
       return;
     }
     zone.flames.forEach((ch) => {
       const u = ch.userData;
       const wob = Math.sin(t * u.speed + u.phase);
-      ch.position.y = u.baseY + wob * 0.1;
-      const sc = u.baseS * (1 + wob * 0.1);
-      ch.scale.set(sc * 0.95, sc * 1.6, 1);
-      ch.material.opacity = 0.78 + wob * 0.2;
+      ch.position.y = u.baseY + wob * 0.08;
+      const sc = u.baseS * (1 + wob * 0.08);
+      ch.scale.set(sc, sc * 1.15, 1);
+      if (u.mat && u.mat.uniforms) {
+        u.mat.uniforms.uIntensity.value = 0.9 + wob * 0.15;
+      }
     });
-    const pulse = 0.85 + Math.sin(t * 9 + zone.i) * 0.15;
-    zone.light.intensity = 10 * pulse;
-    zone.light.position.x = Math.sin(t * 3 + zone.i) * 0.2;
-    // smoke
+    const pulse = 0.82 + Math.sin(t * 10 + zone.i) * 0.18;
+    zone.light.intensity = 16 * pulse;
+    zone.light.position.x = Math.sin(t * 3.2 + zone.i) * 0.25;
+    zone.glow.material.opacity = 0.38 + pulse * 0.18;
+    if (zone.bloom) zone.bloom.material.opacity = 0.12 + pulse * 0.1;
+
     const { spos, svel, sn } = zone;
     for (let i = 0; i < sn; i++) {
       spos[i * 3] += svel[i].vx * dt;
       spos[i * 3 + 1] += svel[i].vy * dt;
       spos[i * 3 + 2] += svel[i].vz * dt;
-      if (spos[i * 3 + 1] > 2.6) {
-        spos[i * 3] = (Math.random() - 0.5) * 2.8;
-        spos[i * 3 + 1] = 0.1;
-        spos[i * 3 + 2] = (Math.random() - 0.5) * 1.0;
+      if (spos[i * 3 + 1] > 2.8) {
+        spos[i * 3] = (Math.random() - 0.5) * 2.9;
+        spos[i * 3 + 1] = 0.15;
+        spos[i * 3 + 2] = (Math.random() - 0.5) * 1.1;
       }
     }
     zone.smoke.geometry.attributes.position.needsUpdate = true;
+
+    if (zone.embers) {
+      const { epos, evel, en } = zone;
+      for (let i = 0; i < en; i++) {
+        epos[i * 3] += evel[i].vx * dt;
+        epos[i * 3 + 1] += evel[i].vy * dt;
+        epos[i * 3 + 2] += evel[i].vz * dt;
+        if (epos[i * 3 + 1] > 2.6) {
+          epos[i * 3] = (Math.random() - 0.5) * 2.4;
+          epos[i * 3 + 1] = 0.2;
+          epos[i * 3 + 2] = (Math.random() - 0.5) * 0.9;
+        }
+      }
+      zone.embers.geometry.attributes.position.needsUpdate = true;
+    }
   });
 
   if (flareT > 0) {
     flareT -= dt;
     const zone = zones[zoneIndex];
     if (zone && zone.alive) {
-      zone.flare.intensity = Math.max(0, 20 * (flareT / 0.5));
-      const pulse = 1 + Math.sin(t * 40) * 0.1;
-      zone.group.scale.setScalar(1.05 * pulse);
+      zone.flare.intensity = Math.max(0, 24 * (flareT / 0.55));
+      const pulse = 1 + Math.sin(t * 42) * 0.12;
+      zone.group.scale.setScalar(1.08 * pulse);
       if (flareT <= 0) zone.group.scale.setScalar(1);
     }
   }
 
-  // spray particles
   if (sprayData && sprayData.alive) {
     sprayT -= dt;
     const { pos, vel, n } = sprayData;
     for (let i = 0; i < n; i++) {
-      vel[i].y -= 5 * dt;
+      vel[i].y -= 5.5 * dt;
       pos[i * 3] += vel[i].x * dt;
       pos[i * 3 + 1] += vel[i].y * dt;
       pos[i * 3 + 2] += vel[i].z * dt;
     }
     sprayPts.geometry.attributes.position.needsUpdate = true;
-    sprayPts.material.opacity = Math.max(0, sprayT / 0.85);
-    if (jetMesh) jetMesh.material.opacity = Math.max(0, 0.55 * (sprayT / 0.85));
+    sprayPts.material.opacity = Math.max(0, sprayT / 0.95);
+    if (jetMesh) jetMesh.material.opacity = Math.max(0, 0.62 * (sprayT / 0.95));
     if (sprayT <= 0) {
       sprayData.alive = false;
       sprayPts.visible = false;
@@ -842,7 +992,6 @@ function tick(dt) {
     }
   }
 
-  // steam
   if (steamData && steamData.t > 0) {
     steamData.t -= dt;
     const { pos, vel, n } = steamData;
@@ -852,33 +1001,30 @@ function tick(dt) {
       pos[i * 3 + 2] += vel[i].z * dt;
     }
     steamPts.geometry.attributes.position.needsUpdate = true;
-    steamPts.material.opacity = Math.max(0, steamData.t / 1.1 * 0.7);
+    steamPts.material.opacity = Math.max(0, steamData.t / 1.25 * 0.75);
     if (steamData.t <= 0) steamPts.visible = false;
   }
 
-  // walk
   if (walking) {
     walkT += dt;
     const u = Math.min(1, walkT / walkDur);
     const e = easeInOut(u);
     camera.position.z = walkFrom + (walkTo - walkFrom) * e;
-    camera.position.y = 1.48 + Math.sin(e * Math.PI) * 0.04;
-    camera.position.x = Math.sin(e * Math.PI * 2) * 0.03;
-    const lookZ = zoneZ(zoneIndex);
-    camera.lookAt(0, 1.05 + (1 - e) * 0.1, lookZ);
+    camera.position.y = 1.5 + Math.sin(e * Math.PI) * 0.05;
+    camera.position.x = Math.sin(e * Math.PI * 2) * 0.035;
+    camera.lookAt(0, 1.1 + (1 - e) * 0.12, zoneZ(zoneIndex));
     if (u >= 1) {
       walking = false;
-      camera.position.set(0, 1.48, walkTo);
-      camera.lookAt(0, 1.1, zoneZ(zoneIndex));
+      camera.position.set(0, 1.5, walkTo);
+      camera.lookAt(0, 1.15, zoneZ(zoneIndex));
     }
   } else if (!busy) {
-    camera.position.y = 1.48 + Math.sin(t * 1.8) * 0.012;
+    camera.position.y = 1.5 + Math.sin(t * 1.8) * 0.014;
     camera.rotation.z = Math.sin(t * 1.15) * 0.004;
   }
 
-  // fog denser near fire
   if (scene.fog && remainingFires() > 0) {
-    scene.fog.density = 0.02 + remainingFires() * 0.004;
+    scene.fog.density = 0.018 + remainingFires() * 0.0035;
   }
 }
 
@@ -907,13 +1053,14 @@ export function init(host) {
   zoneIndex = 0;
   busy = false;
   walking = false;
+  flameMats = [];
 
   renderer = new THREE.WebGLRenderer({ antialias: !LOW, alpha: false, powerPreference: 'high-performance' });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, LOW ? 1.5 : 2));
   renderer.setSize(hostEl.clientWidth || 640, hostEl.clientHeight || 360, false);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.12;
+  renderer.toneMappingExposure = 0.95;
   renderer.shadowMap.enabled = !LOW;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.domElement.style.width = '100%';
@@ -922,33 +1069,36 @@ export function init(host) {
   hostEl.appendChild(renderer.domElement);
 
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x2a1a12);
-  scene.fog = new THREE.FogExp2(0x3a2218, 0.028);
+  scene.background = new THREE.Color(0x1a100c);
+  scene.fog = new THREE.FogExp2(0x2a1810, 0.032);
 
-  camera = new THREE.PerspectiveCamera(60, 1, 0.05, 80);
+  camera = new THREE.PerspectiveCamera(62, 1, 0.05, 80);
   scene.add(camera);
 
   pmrem = new THREE.PMREMGenerator(renderer);
   const env = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
   scene.environment = env;
 
-  hemi = new THREE.HemisphereLight(0xffe8c8, 0x3e2723, 0.7);
-  scene.add(hemi);
-  keyLight = new THREE.DirectionalLight(0xfff5e6, 1.4);
-  keyLight.position.set(3, 7, 4);
+  scene.add(new THREE.HemisphereLight(0xffe0c0, 0x2a1810, 0.45));
+  const keyLight = new THREE.DirectionalLight(0xffe8d0, 0.85);
+  keyLight.position.set(3.5, 8, 4);
   keyLight.castShadow = !LOW;
   if (!LOW) {
     keyLight.shadow.mapSize.set(1024, 1024);
     const c = keyLight.shadow.camera;
-    c.near = 0.5; c.far = 40; c.left = -8; c.right = 8; c.top = 8; c.bottom = -8;
+    c.near = 0.5; c.far = 45; c.left = -10; c.right = 10; c.top = 10; c.bottom = -10;
   }
   scene.add(keyLight);
 
-  flameTex = makeFlameTex();
   smokeTex = softDot([
-    [0, 'rgba(70,70,70,0.55)'],
-    [0.4, 'rgba(50,50,50,0.25)'],
-    [1, 'rgba(30,30,30,0)']
+    [0, 'rgba(65,65,65,0.6)'],
+    [0.4, 'rgba(45,45,45,0.28)'],
+    [1, 'rgba(25,25,25,0)']
+  ]);
+  emberTex = softDot([
+    [0, 'rgba(255,220,120,1)'],
+    [0.35, 'rgba(255,120,30,0.85)'],
+    [1, 'rgba(180,20,0,0)']
   ]);
 
   buildCorridor();
@@ -956,7 +1106,7 @@ export function init(host) {
   buildHose();
   buildSpray();
 
-  applyCameraToZone(0, true);
+  applyCameraToZone(0);
   onResize();
 
   if (typeof ResizeObserver !== 'undefined') {
@@ -971,17 +1121,12 @@ export function init(host) {
   return true;
 }
 
-/** @deprecated meter sync — remaining zones */
-export function setFireLevel(level) {
-  // keep alive first `level` zones from the end? Better: ignore during zone mode
-  // used only as fallback — prefer getRemaining()
-}
-
+export function setFireLevel() {}
 export function spray() { startSprayParticles(); }
 export function flare() { playWrong(); }
 export function win() {
   zones.forEach((z) => { if (z.alive) extinguishZone(z); });
-  if (scene.fog) { scene.fog.color.set(0x4fc3f7); scene.fog.density = 0.018; }
+  if (scene.fog) { scene.fog.color.set(0x4fc3f7); scene.fog.density = 0.016; }
 }
 export function resetWin() {}
 
@@ -1001,6 +1146,7 @@ export function dispose() {
   window.removeEventListener('resize', onResize);
   renderer = scene = camera = root = hoseGroup = null;
   zones = [];
+  flameMats = [];
   sprayPts = sprayData = steamPts = steamData = jetMesh = null;
   hostEl = null;
 }

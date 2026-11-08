@@ -163,18 +163,17 @@ function renderFire() {
   q.o.forEach((x, k) => {
     const b = document.createElement("button");
     b.type = "button";
-    b.className = "bubble" + (isImg ? " img-b" : "");
+    b.className = "opt" + (isImg ? " img-opt" : "");
     if (isImg) {
+      b.innerHTML = `<div class="row"><b>${k + 1}</b><span class="alt-label">${x.alt}</span></div>`;
       const img = document.createElement("img");
       img.src = x.t;
       img.alt = x.alt;
+      img.loading = "eager";
       b.appendChild(img);
-      const cap = document.createElement("div");
-      cap.className = "cap";
-      cap.textContent = `${k + 1}. ${x.alt}`;
-      b.appendChild(cap);
     } else {
-      b.textContent = `${k + 1}. ${x.t}`;
+      b.innerHTML = `<b>${k + 1}</b>`;
+      b.append(document.createTextNode(x.t));
     }
     b.onclick = () => pickFire(k);
     box.appendChild(b);

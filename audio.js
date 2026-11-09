@@ -25,7 +25,7 @@
         this.sfxGain.gain.value = 0.45;
         this.sfxGain.connect(this.master);
         this.bgmGain = this.ctx.createGain();
-        this.bgmGain.gain.value = 0.32; // louder, more driving mix
+        this.bgmGain.gain.value = 0.48; // louder for classroom speakers
         this.bgmGain.connect(this.master);
       }
       if (this.ctx.state === "suspended") {
@@ -291,8 +291,13 @@
 
     async onQuizStart() {
       await this.ensure();
-      if (!this.welcomePlayed && !this.muted) this.playWelcome();
-      this.startBgm();
+      if (this.ctx && this.ctx.state === "suspended") {
+        try { await this.ctx.resume(); } catch (_) {}
+      }
+      if (!this.muted) {
+        if (!this.welcomePlayed) this.playWelcome();
+        this.startBgm();
+      }
     },
 
     onQuizEnd() {
